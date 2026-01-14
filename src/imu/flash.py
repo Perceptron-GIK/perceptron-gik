@@ -12,10 +12,11 @@ f.write("t_ms,ax,ay,az,gx,gy,gz,mx,my,mz\n")
 
 try:
     while True:
-        t = time.ticks_ms() # time since boot
+        t = time.ticks_ms()
 
         # Read IMU data
         ax, ay, az = bmi270_bmm150.accel()
+        ax, ay, az = (a*9.81 for a in (ax, ay, az)) # Record acceleration in m/s^2
         gx, gy, gz = bmi270_bmm150.gyro()
         mx, my, mz = bmi270_bmm150.magnet()
 
