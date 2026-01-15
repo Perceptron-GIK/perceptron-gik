@@ -9,6 +9,7 @@ import ubluepy
 from ubluepy import Peripheral, Service, Characteristic, UUID
 import time
 import imu
+import struct
 from machine import I2C, Pin
 
 # IMU setup
