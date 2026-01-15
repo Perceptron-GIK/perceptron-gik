@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from scipy.signal import savgol_filter
 
 df = pd.read_csv("imu_raw.csv")
 ax_raw, ay_raw, az_raw = df["ax"].to_numpy(dtype=float), df["ay"].to_numpy(dtype=float), df["az"].to_numpy(dtype=float)
@@ -36,16 +37,24 @@ def kalman(raw, Q=1e-4, R=1e-3, x0=None, p0=1.0):
     
     return filtered
 
-ax_filtered, ay_filtered, az_filtered = kalman(ax_raw), kalman(ay_raw), kalman(az_raw)
+ax_k, ay_k, az_k = kalman(ax_raw), kalman(ay_raw), kalman(az_raw)
+
+# Savitzky-Golay filtering: window_length must be odd and >= polyorder + 2
+ax_sg = savgol_filter(ax_raw, window_length=11, polyorder=3)
+ay_sg = savgol_filter(ay_raw, window_length=11, polyorder=3)
+az_sg = savgol_filter(az_raw, window_length=11, polyorder=3)
 
 plt.plot(t, ax_raw, label="ax (raw)")
-plt.plot(t, ax_filtered, label="ax (filtered)")
+plt.plot(t, ax_k, label="ax (kalman)")
+plt.plot(t, ax_sg, label="ax (savgol)")
 
 # plt.plot(t, ay_raw, label="ay (raw)")
-# plt.plot(t, ay_filtered, label="ay (filtered)")
+# plt.plot(t, ay_k, label="ay (kalman)")
+# plt.plot(t, ay_sg, label="ay (savgol)")
 
 # plt.plot(t, az_raw, label="az (raw)")
-# plt.plot(t, az_filtered, label="az (filtered)")
+# plt.plot(t, az_k, label="az (kalman)")
+# plt.plot(t, az_sg, label="az (savgol)")
 
 plt.legend()
 plt.show()
