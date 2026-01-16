@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from scipy.signal import find_peaks
 
 df = pd.read_csv("imu_savgol.csv")
 t, ax_in, ay_in, az_in = df["t"].values, df["ax_sg"].values, df["ay_sg"].values, df["az_sg"].values
@@ -20,45 +21,28 @@ def remove_bias(data):
     data -= bias # Remove bias
     return data
 
-# Helper function to extract event maxima using a sliding window
-def extract_maxima(data, high_th, low_th):
+# Helper function to extract peaks using a sliding window
+def extract_peaks(data, th):
     data = np.asarray(data, dtype=float).copy()
     output = np.zeros_like(data)
-    in_event = False
-    start_idx, max_idx, max_val = None, None, None
-    
-    for i in range(len(data)):
-        if not in_event:
-            if abs(data[i]) > high_th: # Check if value exceeds threshold
-                in_event = True
-                start_idx = i
-                max_idx = i
-                max_val = data[i]
-        else:
-            if abs(data[i]) > abs(max_val): # Update new maximum
-                max_idx = i
-                max_val = data[i]
-            if abs(data[i]) < low_th: # If value falls below threshold
-                output[max_idx] = max_val # Store maximum point
-                in_event = False # Reset
-                max_idx, max_val = None, None
-    
-    if in_event: # If event runs until the last data point
-        output[max_idx] = max_val
-    
+
+    max_idx, _ = find_peaks(data, height=th, distance=5)
+    min_idx, _ = find_peaks(-data, height=th, distance=5)
+    output[max_idx] = data[max_idx]
+    output[min_idx] = data[min_idx]
+
     return output
 
 # Main function to process IMU data
-def process(data, high_th, low_th):
-    processed = extract_maxima(remove_bias(data), high_th, low_th)
+def process(data, high_th):
+    processed = extract_peaks(remove_bias(data), high_th)
     return processed
 
 # Thresholds should be different for accelerometer, gyroscope and magnetometer
-high_a, low_a = 0.5, 0.1
-# high_g, low_g = None, None
-# high_m, low_m = None, None
-ax, ay, az = process(ax_in, high_a, low_a), process(ay_in, high_a, low_a), process(az_in, high_a, low_a)
-print(ax)
+a_th = 0.5
+# g_th = None
+# m_th = None 
+ax, ay, az = process(ax_in, a_th), process(ay_in, a_th), process(az_in, a_th)
 
 dt = np.diff(t, prepend=t[0])
 dt[0] = dt[1]
