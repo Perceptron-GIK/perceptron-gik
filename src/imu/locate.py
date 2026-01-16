@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
 
 df = pd.read_csv("imu_savgol.csv")
-t, ax_in, ay_in, az_in = df["t"].values, df["ax_sg"].values, df["ay_sg"].values, df["az_sg"].values
+t, ax, ay, az = df["t"].values, df["ax_sg"].values, df["ay_sg"].values, df["az_sg"].values
 t *= 0.001 # Convert time to seconds
 
 # Helper function to remove bias from IMU data
@@ -21,7 +21,7 @@ def remove_bias(data):
     data -= bias # Remove bias
     return data
 
-# Helper function to extract peaks using a sliding window
+# Helper function to extract peaks from IMU data using a sliding window
 def extract_peaks(data, th):
     data = np.asarray(data, dtype=float).copy()
     output = np.zeros_like(data)
@@ -33,38 +33,30 @@ def extract_peaks(data, th):
 
     return output
 
-# Main function to process IMU data
-def process(data, high_th):
-    processed = extract_peaks(remove_bias(data), high_th)
-    return processed
+# Main function to process a 1D series of IMU data
+def process(data, t, th, label):
+    dt = np.diff(t, prepend=t[0])
+    dt[0] = dt[1]
+
+    acc = extract_peaks(remove_bias(data), th) # Process acceleration data from IMU
+    vel = np.zeros_like(acc)
+    for k in range(1, len(t)):
+        vel[k] = vel[k-1] + acc[k]*dt[k]
+    pos = np.zeros_like(vel)
+    for k in range(1, len(t)):
+        pos[k] = pos[k-1] + vel[k]*dt[k]
+
+    plt.plot(t, acc, label="acc "+label)
+    plt.plot(t, vel, label="vel "+label)
+    plt.plot(t, pos, label="pos "+label)
+    plt.legend()
+    plt.show()
 
 # Thresholds should be different for accelerometer, gyroscope and magnetometer
 a_th = 0.5
 # g_th = None
 # m_th = None 
-ax, ay, az = process(ax_in, a_th), process(ay_in, a_th), process(az_in, a_th)
 
-dt = np.diff(t, prepend=t[0])
-dt[0] = dt[1]
-
-vx = np.zeros_like(ax)
-vy = np.zeros_like(ay)
-for k in range(1, len(t)):
-    vx[k] = vx[k-1] + ax[k] * dt[k]
-    vy[k] = vy[k-1] + ay[k] * dt[k]
-
-x = np.zeros_like(vx)
-y = np.zeros_like(vy)
-for k in range(1, len(t)):
-    x[k] = x[k-1] + vx[k] * dt[k]
-    y[k] = y[k-1] + vy[k] * dt[k]
-
-plt.plot(t, ax_in, label="ax_in")
-plt.plot(t, ax, label="ax")
-# plt.plot(t, ay, label="ay")
-# plt.plot(t, vx, label="vx")
-# plt.plot(t, vy, label="vy")
-# plt.plot(t, x, label="x")
-# plt.plot(t, y, label="y")
-plt.legend()
-plt.show()
+process(ax, t, a_th, label="x")
+# process(ay, t, a_th, label="y")
+# process(az, t, a_th, label="z")
