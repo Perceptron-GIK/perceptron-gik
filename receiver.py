@@ -63,6 +63,7 @@ async def csv_writer(queue: asyncio.Queue, side: str):
     
     script_dir = os.path.dirname(os.path.abspath(__file__))  # change if receiver.py is not in the same directory as Data
     data_dir = os.path.join(script_dir, "data")
+    os.makedirs(data_dir, exist_ok=True)
     
     # Maintain Metadata of sessions, so that upon reconnection a new csv file is created
     metadata_file = os.path.join(data_dir,f"metadata_{side}.txt")
