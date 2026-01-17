@@ -85,7 +85,7 @@ class IMUTracker:
             pred_m = normalise(-rotate(q) @ magv) # Predicted magnetic field
 
             # Difference between actual and predicted vectors
-            residual = np.vstack((normalise(at), mt)) - np.vstack((pa, pm))
+            residual = np.vstack((normalise(at), mt)) - np.vstack((pred_a, pred_m))
 
             Ra = [(acc_noise/np.linalg.norm(at))**2 + (1 - grm/np.linalg.norm(at))**2]*3 # Accelerometer noise
             Rm = [mag_noise**2]*3 # Magnetometer noise
@@ -164,3 +164,43 @@ class IMUTracker:
             return filtered_a_world
         else:
             return a_world
+        
+    def zupt(self, a_world, threshold):
+        '''
+        Apply Zero Velocity Update (ZUPT) algorithm to obtain velocities from acceleration data
+        
+        @param: a_world: Acceleration data with drift removed
+        @param: threshold: Threshold for motion detection
+
+        Return: Velocity data
+        '''
+
+        nSamples = np.shape(a_world)[0]
+        velocities = []
+        prev_t = -1 # Previous stationary time
+        stationary = False # Flag indicating whether the device is stationary
+
+        vt = np.zeros(3, 1)
+        t = 0
+        while t < nSamples:
+            at = a_world[t, np.newaxis].T
+
+            if np.linalg.norm(at) < threshold:
+                if not stationary: # End of motion
+                    pred_v = vt + at*self.dt 
+                    drift_rate = pred_v / (t- prev_t)
+                    for i in range(t - prev_t - 1): # Remove drift from every period of motion
+                        velocities[prev_t + 1 + i] -= (i+1)*drift_rate.T[0]
+
+                vt = np.zeros((3, 1)) # Set velocity to zero
+                prev_t = t
+                stationary = True
+            else:
+                vt = vt + at*self.dt 
+                stationary = False
+
+            velocities.append(vt.T[0])
+            t += 1
+        
+        velocities = np.array(velocities)
+        return velocities
