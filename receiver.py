@@ -40,7 +40,6 @@ async def _csv_writer(queue: asyncio.Queue, file_name: str ):
         file_name (str): csv file to which we want to write data
     """
     with open(file_name, 'a') as f:
-        writer = csv_writer(f) #creates a writer object
         flush_counter = 0
         
         # Main writer logic loop
@@ -48,7 +47,6 @@ async def _csv_writer(queue: asyncio.Queue, file_name: str ):
             data = await queue.get()
             f.write(f"{data}\n")
             flush_counter += 1
-            
             if flush_counter >= RECEIVE_RATE: # Write to the file every second
                 f.flush()
                 flush_counter = 0
@@ -65,7 +63,7 @@ async def csv_writer(queue: asyncio.Queue, side: str):
     data_dir = os.path.abspath("/data")   # change if receiver.py is not in the same directory as Data
     
     # Maintain Metadata of sessions, so that upon reconnection a new csv file is created
-    metadata_file = os.join(data_dir,f"metadata_{side}.txt")
+    metadata_file = os.path.join(data_dir,f"metadata_{side}.txt")
     session_id  = None
     
     if OVERRIDE_SESSION_ID:
@@ -73,9 +71,9 @@ async def csv_writer(queue: asyncio.Queue, side: str):
     
     elif os.path.exists(metadata_file):
         # Increment session_id to start new session
-        with open(metadata_file, "w") as m:
+        with open(metadata_file, "r") as m:
             session_id = int(m.readline().rstrip()) + 1
-            m.seek(0)
+        with open(metadata_file, "w") as m:
             m.write(f"{session_id}\n")
     else: 
         # metadata file doesn't exist
@@ -83,14 +81,14 @@ async def csv_writer(queue: asyncio.Queue, side: str):
             m.write("1\n") # start with session_id 1
             session_id = 1
             
-    data_file = os.path.abspath("/data/{side}_{session_id}.csv") # change if receiver.py is not in the same directory as Data
+    data_file = os.path.join(data_dir, f"{side}_{session_id}.csv") # change if receiver.py is not in the same directory as Data
     
     if not(os.path.exists(data_file)):
         # write headers for a new csv file
         with open(data_file, "w") as f:
             f.write(f"{DATA_HEADER}\n")
             
-    _csv_writer(queue, data_file)
+    await _csv_writer(queue, data_file)
 
 
 def print_data(bluetooth_data: list) -> None:
@@ -174,7 +172,7 @@ def handler_closure(queue: asyncio.Queue , side: str) -> function :
         received_data.insert(1, ts_string)
         
         # Push data into the queue
-        queue.put_nowait(','.join(received_data))
+        queue.put_nowait(','.join(str(x) for x in received_data))
 
     return handler 
 
