@@ -5,6 +5,7 @@
 # The script utilises threading to run both left and right hand concurrently using asyncio.gather
 #------------------------------------------------------------------------------------------------------
 import asyncio, struct, time, os
+from typing import Callable
 from bleak import BleakScanner, BleakClient
 from datetime import datetime  
 
