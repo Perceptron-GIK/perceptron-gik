@@ -118,3 +118,49 @@ class IMUTracker:
         ori_y = np.array(ori_y)
         ori_z = np.array(ori_z)
         return (a_world, ori_x, ori_y, ori_z)
+    
+    def remove_acc_drift(self, a_world, threshold=0.2, filter=False, cof=(0.01, 15)):
+        '''
+        Remove drift in acceleration data, assuming that the 
+        device is stationary at the start and end of measurement.
+        Optionally, pass the final acceleration data through a bandpass filter.
+        
+        @param a_world: Acceleration data from Kalman filter output
+        @param threshold: Threshold to detect the start and end of motion
+        @param cof: Bandpass filter cutoff frequencies
+
+        Return: Corrected and optionally filtered acceleration data
+        '''
+
+        nSamples = np.shape(a_world)[0]
+        t_start = 0
+        for t in range(nSamples):
+            at = a_world[t]
+            if np.linalg.norm(at) > threshold:
+                t_start = t
+                break
+        
+        t_end = 0
+        for t in range(nSamples-1, -1, -1):
+            at = a_world[t]
+            if np.linalg.norm(at-a_world[-1]) > threshold:
+                t_end = t
+                break
+        
+        drift = a_world[t_end:].mean(axis=0)
+        drift_rate = drift/(t_end - t_start) # Assuming drift accumulates linearly
+
+        # Remove drift during period of motion
+        for i in range(t_end - t_start):
+            a_world[t_start+i] -= (i+1)*drift_rate
+
+        # Remove drift after motion
+        for i in range(nSamples - t_end):
+            a_world[t_end+1] -= drift
+
+        # Optional bandpass filtering
+        if filter:
+            filtered_a_world = filter_signal([a_world], dt=self.dt, cof=cof, btype='bandpass')[0]
+            return filtered_a_world
+        else:
+            return a_world
