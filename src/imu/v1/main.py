@@ -3,6 +3,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from mathlib import *
 
+# TODO: Check how algorithm performs when magnetometer data is omitted
+
 class IMUTracker:
     def __init__(self, sr):
         self.sr = sr
@@ -57,9 +59,9 @@ class IMUTracker:
         '''
 
         grv, grm, magv, gyro_noise, gyro_bias, acc_noise, mag_noise = init_tuple
-        a = data[:, 0:3]
-        g = data[:, 3:6] - gyro_bias
-        m = data[:, 6:9]
+        a = data[:, 1:4]
+        g = data[:, 4:7] - gyro_bias
+        m = data[:, 7:10]
         nSamples = np.shape(data)[0]
 
         # Empty lists to store acceleration and orientation data
@@ -118,7 +120,7 @@ class IMUTracker:
         ori_x = np.array(ori_x)
         ori_y = np.array(ori_y)
         ori_z = np.array(ori_z)
-        return (a_world, ori_x, ori_y, ori_z)
+        return (a_world, ori_x, ori_y, ori_z) # Orientation is returned for debugging or visualisation purposes only
     
     def remove_acc_drift(self, a_world, threshold=0.2, filter=False, cof=(0.01, 15)):
         '''
@@ -232,34 +234,41 @@ class IMUTracker:
         return positions
 
 # Read raw IMU data from CSV file
-# TODO: Check if first and last few samples should be removed to reduce noise
+# TODO: Check if removing first and last few samples help with performance after introducing starting and ending gesture
 def read_data(filepath):
-    data = pd.read_csv(filepath).to_numpy()
+    data = pd.read_csv(filepath, skiprows=0, skipfooter=0, engine='python').to_numpy()
     return data
+
+'''
+Tunable Parameters:
+| Parameter | Function |
+|-----------|----------|
+| noise_coefficient | initialise |
+| threshold | remove_acc_drift, zupt |
+| filter | remove_acc_drift |
+| cof | remove_acc_drift |
+'''
 
 # Main function
 def run():
     data = read_data("../data/imu_raw.csv")
     t = data[:, 0]
     sr = 1/(np.mean(np.diff(t), axis=0)*0.001) # Sampling rate in Hz
-    print(f"IMU Sampling Rate: {sr}Hz")
     
     tracker = IMUTracker(sr=sr)
+    init_tuple = tracker.initialise(data, noise_coefficient={'g':300, 'a': 300, 'm': 30})
 
-    print("Initialising...")
-    init_tuple = tracker.initialise(data)
-    print("Initialisation done!")
-
-    print("Processing...")
-    a_world, ori_x, ori_y, ori_z = tracker.track_attitude(data, init_tuple)
-    a_world_processed = tracker.remove_acc_drift(a_world, filter=False)
-    v = tracker.zupt(a_world_processed, threshold=0.2)
+    a_world, *_ = tracker.track_attitude(data, init_tuple)
+    a_world_processed = tracker.remove_acc_drift(a_world, threshold=0.8, filter=True, cof=(0.2, 15))
+    v = tracker.zupt(a_world_processed, threshold=0.05)
     p = tracker.track_position(a_world_processed, v)
-    print("Processing done!")
 
-    plt.plot(np.arange(0, p.shape[0], 1), p[:, 0], label='x')
-    plt.plot(np.arange(0, p.shape[0], 1), p[:, 1], label='y')
-    plt.plot(np.arange(0, p.shape[0], 1), p[:, 2], label='z')
+    plt.plot(np.arange(0, t.shape[0], 1), data[:, 1], label="acc x (raw)")
+    plt.plot(np.arange(0, a_world_processed.shape[0], 1), a_world_processed[:, 0], label="acc x (processed)")
+    plt.plot(np.arange(0, v.shape[0], 1), v[:, 0], label='vel x')
+    plt.plot(np.arange(0, p.shape[0], 1), p[:, 0], label="pos x")
+    # plt.plot(np.arange(0, p.shape[0], 1), p[:, 1], label="pos y")
+    # plt.plot(np.arange(0, p.shape[0], 1), p[:, 2], label="pos z")
     plt.legend()
     plt.show()
 
