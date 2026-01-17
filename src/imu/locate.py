@@ -33,6 +33,14 @@ def extract_peaks(data, th):
 
     return output
 
+# Helper function to zero out velocity during periods of constant acceleration
+def zero_vel(acc, vel):
+    vel = np.asarray(vel, dtype=float).copy()
+    for i in range(2, len(acc)-2):
+        if not acc[i-2:i+2].any():
+            vel[i-2:i+2] = 0
+    return vel
+
 # Main function to process a 1D series of IMU data
 def process(data, t, th, label):
     dt = np.diff(t, prepend=t[0])
@@ -42,12 +50,14 @@ def process(data, t, th, label):
     vel = np.zeros_like(acc)
     for k in range(1, len(t)):
         vel[k] = vel[k-1] + acc[k]*dt[k]
+    vel = zero_vel(acc, vel)
     pos = np.zeros_like(vel)
     for k in range(1, len(t)):
         pos[k] = pos[k-1] + vel[k]*dt[k]
 
-    plt.plot(t, acc, label="acc "+label)
-    plt.plot(t, vel, label="vel "+label)
+    # plt.plot(t, data, label="input")
+    # plt.plot(t, acc, label="acc "+label)
+    # plt.plot(t, vel, label="vel "+label)
     plt.plot(t, pos, label="pos "+label)
     plt.legend()
     plt.show()
