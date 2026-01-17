@@ -60,7 +60,8 @@ async def csv_writer(queue: asyncio.Queue, side: str):
         side (str): specifies the arduino (either Left or Right) supplying our data
     """
     
-    data_dir = os.path.abspath("/data")   # change if receiver.py is not in the same directory as Data
+    script_dir = os.path.dirname(os.path.abspath(__file__))  # change if receiver.py is not in the same directory as Data
+    data_dir = os.path.join(script_dir, "data")
     
     # Maintain Metadata of sessions, so that upon reconnection a new csv file is created
     metadata_file = os.path.join(data_dir,f"metadata_{side}.txt")
@@ -145,7 +146,7 @@ def print_data(bluetooth_data: list) -> None:
     )
 
 
-def handler_closure(queue: asyncio.Queue , side: str) -> function : 
+def handler_closure(queue: asyncio.Queue , side: str) -> Callable[[object, bytes], None] : 
     """ THis is a Python closure ( Higher Order function), this is basically a trick to call the function defined inside handler with its 
     argument structure while passing in additional arguments that will be defined only in its scope, like the queue and side.
 
