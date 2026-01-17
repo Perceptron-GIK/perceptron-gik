@@ -204,3 +204,28 @@ class IMUTracker:
         
         velocities = np.array(velocities)
         return velocities
+    
+    def track_position(self, a_world, velocities):
+        '''
+        Obtain position from acceleration and velocity data
+
+        @param a_world: Acceleration data with drift removed
+        @param velocities: Velocity data from ZUPT output
+
+        Return: 3D coordinates in world frame
+        '''
+
+        nSamples = np.shape(a_world)[0]
+        positions = []
+        
+        pt = np.array([[0, 0, 0]]).T # Set the starting position as the origin
+        t = 0
+        while t < nSamples:
+            at = a_world[t, np.newaxis].T
+            vt = velocities[t, np.newaxis].T
+            pt = pt + vt*self.dt + 0.5*at*self.dt**2 # Kinematic constant acceleration equation
+            positions.append(pt.T[0])
+            t += 1
+        
+        positions = np.array(positions)
+        return positions
