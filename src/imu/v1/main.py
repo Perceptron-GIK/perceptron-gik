@@ -1,11 +1,12 @@
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 from mathlib import *
 
 class IMUTracker:
-    def __init__(self, sampling):
-        super().__init__() # TODO: Check if this is necessary
-        self.sampling = sampling # Sampling rate of the IMU in Hz, TODO: Calculate sampling rate from IMU data
-        self.dt = 1/sampling
+    def __init__(self, sr):
+        self.sr = sr
+        self.dt = 1/sr
     
     def initialise(self, data, noise_coefficient={'g':100, 'a': 100, 'm': 10}):
         '''
@@ -18,9 +19,9 @@ class IMUTracker:
         (grv, grm, magv, gyro_noise, gyro_bias, acc_noise, mag_noise)
         '''
 
-        a = data[:, 0:3]
-        g = data[:, 3:6]
-        m = data[:, 6:9]
+        a = data[:, 1:4]
+        g = data[:, 4:7]
+        m = data[:, 7:10]
 
         grv = -a.mean(axis=0) # Gravity vector
         grv = grv[:, np.newaxis]
@@ -180,7 +181,7 @@ class IMUTracker:
         prev_t = -1 # Previous stationary time
         stationary = False # Flag indicating whether the device is stationary
 
-        vt = np.zeros(3, 1)
+        vt = np.zeros((3, 1))
         t = 0
         while t < nSamples:
             at = a_world[t, np.newaxis].T
@@ -229,3 +230,38 @@ class IMUTracker:
         
         positions = np.array(positions)
         return positions
+
+# Read raw IMU data from CSV file
+# TODO: Check if first and last few samples should be removed to reduce noise
+def read_data(filepath):
+    data = pd.read_csv(filepath).to_numpy()
+    return data
+
+# Main function
+def run():
+    data = read_data("../data/imu_raw.csv")
+    t = data[:, 0]
+    sr = 1/(np.mean(np.diff(t), axis=0)*0.001) # Sampling rate in Hz
+    print(f"IMU Sampling Rate: {sr}Hz")
+    
+    tracker = IMUTracker(sr=sr)
+
+    print("Initialising...")
+    init_tuple = tracker.initialise(data)
+    print("Initialisation done!")
+
+    print("Processing...")
+    a_world, ori_x, ori_y, ori_z = tracker.track_attitude(data, init_tuple)
+    a_world_processed = tracker.remove_acc_drift(a_world, filter=False)
+    v = tracker.zupt(a_world_processed, threshold=0.2)
+    p = tracker.track_position(a_world_processed, v)
+    print("Processing done!")
+
+    plt.plot(np.arange(0, p.shape[0], 1), p[:, 0], label='x')
+    plt.plot(np.arange(0, p.shape[0], 1), p[:, 1], label='y')
+    plt.plot(np.arange(0, p.shape[0], 1), p[:, 2], label='z')
+    plt.legend()
+    plt.show()
+
+if __name__ == "__main__":
+    run()
