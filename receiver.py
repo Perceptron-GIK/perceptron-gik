@@ -14,15 +14,15 @@ DEVICE_NAME_R = "GIK_Nano_R" # Right hand nano name
 UUID_TX_L = "00001235-0000-1000-8000-00805f9b34fb" # Left hand TX characteristic UUID
 UUID_TX_R = "00001237-0000-1000-8000-00805f9b34fb" # Right hand TX characteristic UUID
 
-packet_dtype_def = "<I" + "f"*6 + ("f"*6 + "B")*5  # little-endian
+packet_dtype_def = "<I" +"f"*6 + ("f"*6 + "B")*5  # little-endian
 assert struct.calcsize(packet_dtype_def) == 153 # match the packet size
 
 
 
-def handler(side, data):
+def handler(sender ,data):
 
     if len(data) != 153: # sanity check
-        print(f"Unexpected length from {side} hand", len(data))
+        print(f"Unexpected length from hand", len(data))
         return
     # unpack the packet
 
@@ -58,7 +58,7 @@ def handler(side, data):
     ts_string = datetime.fromtimestamp(t).strftime("%H:%M:%S.%f")[:-3]  # HH:MM:SS.mmm
 
     print(
-        f"id={sample_id},{side} "
+        f"id={sample_id}"
         f"time={ts_string} "
         f"a_b=({ax_base:.4f},{ay_base:.4f},{az_base:.4f}) "
         f"g_b=({gx_base:.4f},{gy_base:.4f},{gz_base:.4f}) "
@@ -95,7 +95,6 @@ async def wait_for_nano(device_name):
 
 
 async def connect(device_name, uuid):
-
     # To distingiush left and right from the device name
     if "_R" in device_name:
         side = "Right"
@@ -107,7 +106,7 @@ async def connect(device_name, uuid):
     while True:
 
         async with BleakClient(nano.address) as client:
-            tx_chareft = None
+            tx_char = None
             print("Connected:", nano.address)
             for service in client.services:
                 print("Service:", service.uuid)
@@ -121,7 +120,7 @@ async def connect(device_name, uuid):
 
             print(f"{side} Characteristic:", tx_char)
 
-            await client.start_notify(tx_char, handler(side)) # Activate notifications/indications on the characteristic.
+            await client.start_notify(tx_char, handler) # Activate notifications/indications on the characteristic.
 
             while client.is_connected:
                 
