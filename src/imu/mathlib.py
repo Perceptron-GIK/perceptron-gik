@@ -1,4 +1,5 @@
 import numpy as np
+import scipy.signal
 
 # Normalisation
 def normalise(x):
@@ -51,3 +52,12 @@ def H(q, grv, magv):
     H1 = H_helper(q, grv)
     H2 = H_helper(q, magv)
     return np.vstack((-H1, H2))
+
+# Apply butterworth filtering
+def filter_signal(data, dt=0.01, cof=10, btype='lowpass', order=1):
+    filtered = []
+    num, den = scipy.signal.butter(order, cof, fs=1/dt, btype=btype)
+    for d in data:
+        d = scipy.signal.filtfilt(num, den, d, axis=0)
+        filtered.append(d)
+    return filtered
