@@ -14,7 +14,7 @@ def I(n):
 
 # State transition Jacobian matrix
 def F(gt, dt):
-    g = gt.t[0]
+    g = gt.T[0]
     Omega = np.array([[0, -g[0], -g[1], -g[2]], [g[0], 0, g[2], -g[1]],
                       [g[1], -g[2], 0, g[0]], [g[2], g[1], -g[0], 0]])
     return I(4) + 0.5*dt*Omega
