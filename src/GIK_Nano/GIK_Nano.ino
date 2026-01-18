@@ -8,6 +8,21 @@
 #include "GIK_Hand_Config.h"  // Include the hand configuration file
 #include <ArduinoBLE.h>
 #include "Arduino_BMI270_BMM150.h"
+#include <SPI.h>
+
+// Constants
+
+const int CS_THUMB = 2; // Chip Select pin for talking to thumb IMU
+const int CS_INDEX = 3; // Chip Select  pin for talking to index IMU
+const int CS_MIDDLE = 4; // Chip Select  pin for talking to middle IMU
+const int CS_RING = 5; // Chip Select  pin for talking to ring IMU
+const int CS_PINKY = 6; // Chip Select  pin for talking to pinky IMU
+
+const int FORCE_THUMB = A0; // Force sensor pin for thumb
+const int FORCE_INDEX = A1; // Force sensor pin for index
+const int FORCE_MIDDLE = A2; // Force sensor pin for middle
+const int FORCE_RING = A3; // Force sensor pin for ring
+const int FORCE_PINKY = A4; // Force sensor pin for pinky
 
 BLEService GIK_Service(ServiceID);  // service ID
 BLECharacteristic GIK_tx_Char(CharID,BLERead | BLENotify,153); // Characteristic ID with notification and MTU of 153 BYTES
@@ -187,4 +202,15 @@ void loop() {
 
     Serial.println("Receiver disconnected");
   }
+}
+
+void spi_init(){
+
+  pinMode(CS_THUMB, OUTPUT)
+  pinMode(CS_THUMB, OUTPUT)
+  pinMode(CS_THUMB, OUTPUT)
+  pinMode(CS_THUMB, OUTPUT)
+  pinMode(CS_THUMB, OUTPUT)
+
+  
 }
