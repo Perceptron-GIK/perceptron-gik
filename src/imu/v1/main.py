@@ -3,12 +3,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from mathlib import *
 
-# TODO: Check how algorithm performs when magnetometer data is omitted
-
 class IMUTracker:
-    def __init__(self, sr):
-        self.sr = sr
+    def __init__(self, sr, use_mag=True):
+        self.sr = sr # Sampling rate in Hz
         self.dt = 1/sr
+        self.use_mag = use_mag # Boolean flag indicating whether magnetometer data is used
     
     def initialise(self, data, noise_coefficient={'g':100, 'a': 100, 'm': 10}):
         '''
@@ -23,26 +22,37 @@ class IMUTracker:
 
         a = data[:, 1:4]
         g = data[:, 4:7]
-        m = data[:, 7:10]
+
+        if data.shape[1] >= 10:
+            m = data[:, 7:10]
+        else:
+            m = None
 
         grv = -a.mean(axis=0) # Gravity vector
         grv = grv[:, np.newaxis]
         grm = np.linalg.norm(grv) # Gravity magnitude
 
-        magv = m.mean(axis=0) # Magnetic field vector
-        magv = normalise(magv)[:, np.newaxis]
+        if self.use_mag and m is not None:
+            magv = m.mean(axis=0) # Magnetic field vector
+            magv = normalise(magv)[:, np.newaxis]
+        else:
+            magv = np.array([[1.0, 0.0, 0.0]]).T # Dummy unit vector
 
         # Compute noise covariance
         avar = a.var(axis=0)
         gvar = g.var(axis=0)
-        mvar = m.var(axis=0)
 
         # Compute sensor noise
         gyro_noise = np.linalg.norm(gvar)*noise_coefficient['g']
         gyro_bias = g.mean(axis=0)
         acc_noise = np.linalg.norm(avar)*noise_coefficient['a']
-        mag_noise = np.linalg.norm(mvar)*noise_coefficient['m']
-        
+
+        if self.use_mag and m is not None:
+            mvar = m.var(axis=0)
+            mag_noise = np.linalg.norm(mvar)*noise_coefficient['m']
+        else:
+            mag_noise = 0.0
+
         return (grv, grm, magv, gyro_noise, gyro_bias, acc_noise, mag_noise)
     
     def track_attitude(self, data, init_tuple):
@@ -61,7 +71,12 @@ class IMUTracker:
         grv, grm, magv, gyro_noise, gyro_bias, acc_noise, mag_noise = init_tuple
         a = data[:, 1:4]
         g = data[:, 4:7] - gyro_bias
-        m = data[:, 7:10]
+
+        if self.use_mag and data.shape[1] >= 10:
+            m = data[:, 7:10]
+        else:
+            m = None
+
         nSamples = np.shape(data)[0]
 
         # Empty lists to store acceleration and orientation data
@@ -76,7 +91,9 @@ class IMUTracker:
         while t < nSamples:
             at = a[t, np.newaxis].T
             gt = g[t, np.newaxis].T
-            mt = normalise(m[t, np.newaxis].T)
+
+            if self.use_mag and m is not None:
+                mt = normalise(m[t, np.newaxis].T)
 
             Ft = F(gt, self.dt) # State transition Jacobian matrix
             Gt = G(q) # Map gyroscope noise into quaternion perturbations
@@ -85,16 +102,25 @@ class IMUTracker:
             P = Ft @ P @ Ft.T + Q # Update state covariance
 
             pred_a = normalise(-rotate(q) @ grv) # Predicted acceleration
-            pred_m = normalise(-rotate(q) @ magv) # Predicted magnetic field
 
-            # Difference between actual and predicted vectors
-            residual = np.vstack((normalise(at), mt)) - np.vstack((pred_a, pred_m))
+            if self.use_mag and m is not None:
+                pred_m = normalise(-rotate(q) @ magv) # Predicted magnetic field
 
-            Ra = [(acc_noise/np.linalg.norm(at))**2 + (1 - grm/np.linalg.norm(at))**2]*3 # Accelerometer noise
-            Rm = [mag_noise**2]*3 # Magnetometer noise
-            R = np.diag(Ra + Rm)
+                # Difference between actual and predicted vectors
+                residual = np.vstack((normalise(at), mt)) - np.vstack((pred_a, pred_m))
 
-            Ht = H(q, grv, magv) # Measurement Jacobian matrix
+                Ra = [(acc_noise/np.linalg.norm(at))**2 + (1 - grm/np.linalg.norm(at))**2]*3 # Accelerometer noise
+                Rm = [mag_noise**2]*3 # Magnetometer noise
+                R = np.diag(Ra + Rm)
+
+                Ht = H(q, grv, magv) # Measurement Jacobian matrix
+            else:
+                residual = normalise(at) - pred_a
+                Ra = [(acc_noise/np.linalg.norm(at))**2 + (1 - grm/np.linalg.norm(at))**2]*3
+                R = np.diag(Ra)
+                H_full = H(q, grv, magv)
+                Ht = H_full[0:3, :] # Extract accelerometer component
+
             S = Ht @ P @ Ht.T + R # Residual covariance
             K = P @ Ht.T @ np.linalg.inv(S) # Kalman gain matrix
 
@@ -250,13 +276,13 @@ Tunable Parameters:
 '''
 
 # Main function
-def run():
+def run(use_mag=True):
     data = read_data("../data/imu_raw.csv")
     t = data[:, 0]
     sr = 1/(np.mean(np.diff(t), axis=0)*0.001) # Sampling rate in Hz
     
-    tracker = IMUTracker(sr=sr)
-    init_tuple = tracker.initialise(data, noise_coefficient={'g':300, 'a': 300, 'm': 30})
+    tracker = IMUTracker(sr=sr, use_mag=use_mag)
+    init_tuple = tracker.initialise(data, noise_coefficient={'g': 10, 'a': 10, 'm': 10})
 
     a_world, *_ = tracker.track_attitude(data, init_tuple)
     a_world_processed = tracker.remove_acc_drift(a_world, threshold=0.8, filter=True, cof=(0.2, 15))
@@ -273,4 +299,4 @@ def run():
     plt.show()
 
 if __name__ == "__main__":
-    run()
+    run(use_mag=False)
