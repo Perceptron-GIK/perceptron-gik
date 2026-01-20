@@ -277,16 +277,18 @@ Tunable Parameters:
 
 # Main function
 def run(use_mag=True):
-    data = read_data("../data/imu_raw.csv")
-    t = data[:, 0]
-    sr = 1/(np.mean(np.diff(t), axis=0)*0.001) # Sampling rate in Hz
+    df = pd.read_csv("../data/Left_1.csv")
+    t = pd.to_datetime(df["time_stamp"], format="%H:%M:%S.%f").iloc[:].diff().dt.total_seconds()*1000 # Time in ms from start of data collection
+    t.iloc[0] = 0
+    sr = 1/(t.mean()*0.001) # Sampling rate in Hz
+    data = pd.concat([t, df.iloc[:, 2:8]], axis=1).to_numpy()
     
     tracker = IMUTracker(sr=sr, use_mag=use_mag)
-    init_tuple = tracker.initialise(data, noise_coefficient={'g': 10, 'a': 10, 'm': 10})
+    init_tuple = tracker.initialise(data, noise_coefficient={'g': 10, 'a': 35, 'm': 10})
 
     a_world, *_ = tracker.track_attitude(data, init_tuple)
-    a_world_processed = tracker.remove_acc_drift(a_world, threshold=0.8, filter=True, cof=(0.2, 15))
-    v = tracker.zupt(a_world_processed, threshold=0.05)
+    a_world_processed = tracker.remove_acc_drift(a_world, threshold=0.2, filter=True, cof=(0.1, 5))
+    v = tracker.zupt(a_world_processed, threshold=0.2)
     p = tracker.track_position(a_world_processed, v)
 
     plt.plot(np.arange(0, t.shape[0], 1), data[:, 1], label="acc x (raw)")
