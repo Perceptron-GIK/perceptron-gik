@@ -7,6 +7,7 @@
 import asyncio, struct, time, os
 from bleak import BleakScanner, BleakClient
 from datetime import datetime  
+from typing import Callable
 
 # CONSTANTS 
 DEVICE_NAME_L = "GIK_Nano_L" # Left hand nano name
