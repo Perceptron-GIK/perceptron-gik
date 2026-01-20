@@ -10,7 +10,7 @@
 #include "Arduino_BMI270_BMM150.h"
 
 BLEService GIK_Service(ServiceID);  // service ID
-BLECharacteristic GIK_tx_Char(CharID,BLERead | BLENotify,153); // Characteristic ID with notification and MTU of 153 BYTES
+BLECharacteristic GIK_tx_Char(CharID,BLERead | BLENotify,165); // Characteristic ID with notification and MTU of 153 BYTES
 
 const char* Name = Hand_Name;
 
@@ -18,6 +18,7 @@ const char* Name = Hand_Name;
 
 float ax_base = 0, ay_base = 0, az_base = 0; // accelerometer xyz from left base 
 float gx_base = 0, gy_base = 0, gz_base = 0; // gyro xyz from left base
+float mx_base = 0, my_base = 0, mz_base = 0; // magnatometer xyz from left base
 
 float ax_thumb = 0, ay_thumb = 0, az_thumb = 0; // accelerometer xyz from left thumb 
 float gx_thumb = 0, gy_thumb = 0, gz_thumb = 0; // gyro xyz from left thumb
@@ -41,10 +42,10 @@ bool f_pinky = 0; // force sensor boolean for left pinky
 
 // Packet layout (little-endian):
 // uint32  sample_id
-// float   ax_base, ay_base, az_base, gx_base, gy_base, gz_base
+// float   ax_base, ay_base, az_base, gx_base, gy_base, gz_base, mx_base, my_base, mz_base
 // for each finger: thumb, index, middle, ring, pinky
 //   float ax, ay, az, gx, gy, gz
-//   uint8 f which should add up to 153 bytes of MTU
+//   uint8 f which should add up to 165 bytes of MTU
 
 
 uint32_t sample_id = 0; // to label the packets
@@ -98,15 +99,20 @@ void loop() {
     // Only acquire IMU data and send while connected
     while (central.connected()) {
       if (IMU.accelerationAvailable()) {
-        IMU.readAcceleration(ax_base, ay_base, az_base);
+        IMU.readAcceleration(ax_base, ay_base, az_base); // Acceleration in g
       }
 
       if (IMU.gyroscopeAvailable()) {
-        IMU.readGyroscope(gx_base, gy_base, gz_base);
+        IMU.readGyroscope(gx_base, gy_base, gz_base); // Gyro vaules in degrees/second
       }
+
+      if (IMU.magneticFieldAvailable()) {
+        IMU.readMagneticField(mx_base, my_base, mz_base); // Magnetic field in the units of: uT
+      }
+
       sample_id++;
 
-      uint8_t buf[153];
+      uint8_t buf[165];
       uint8_t *p = buf;
 
       #define PACK_FLOAT(x)  do { memcpy(p, &(x), 4); p += 4; } while (0) // function to perform mem copy for each variable
@@ -121,6 +127,9 @@ void loop() {
       PACK_FLOAT(gx_base);
       PACK_FLOAT(gy_base);
       PACK_FLOAT(gz_base);
+      PACK_FLOAT(mx_base);
+      PACK_FLOAT(my_base);
+      PACK_FLOAT(mz_base);
 
       // thumb
       PACK_FLOAT(ax_thumb);
