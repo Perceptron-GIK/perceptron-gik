@@ -9,18 +9,33 @@
 #include <ArduinoBLE.h>
 #include "Arduino_BMI270_BMM150.h"
 
+// For Finger IMU libraries
+#include <SPI.h>
+#include <Adafruit_BMP280.h>
+#include <BMI160Gen.h>
+
 BLEService GIK_Service(ServiceID);  // service ID
 BLECharacteristic GIK_tx_Char(CharID,BLERead | BLENotify,153); // Characteristic ID with notification and MTU of 153 BYTES
+Adafruit_BMP280 BMP280;
+
 
 const char* Name = Hand_Name;
+
+const int CS_THUMB = 10; // Chip Select pin for talking to thumb IMU
+const int CS_INDEX = 3; // Chip Select  pin for talking to index IMU
+const int CS_MIDDLE = 4; // Chip Select  pin for talking to middle IMU
+const int CS_RING = 5; // Chip Select  pin for talking to ring IMU
+const int CS_PINKY = 6; // Chip Select  pin for talking to pinky IMU
 
 // Definition of variables for left hand
 
 float ax_base = 0, ay_base = 0, az_base = 0; // accelerometer xyz from left base 
 float gx_base = 0, gy_base = 0, gz_base = 0; // gyro xyz from left base
 
-float ax_thumb = 0, ay_thumb = 0, az_thumb = 0; // accelerometer xyz from left thumb 
-float gx_thumb = 0, gy_thumb = 0, gz_thumb = 0; // gyro xyz from left thumb
+
+float ax_tb, ay_tb, az_tb, gx_tb, gy_tb, gz_tb;
+int ax_thumb, ay_thumb, az_thumb; // accelerometer xyz from left thumb 
+int gx_thumb, gy_thumb, gz_thumb; // gyro xyz from left thumb
 bool f_thumb = 0; // force sensor boolean for left thumb
 
 float ax_index = 0, ay_index = 0, az_index = 0; // accelerometer xyz from left index
@@ -61,6 +76,12 @@ void setup() {
     Serial.println("Failed to initialize BLE!");
     while (1);
   }
+
+  // Initialise SPI for finger IMUs
+  SPI.begin();
+  BMI160.begin(CS_THUMB);
+  BMI160.setGyroRange(250); // supported values: 125, 250, 500, 1000, 2000 (degrees/second)
+  BMI160.setAccelerometerRange(4); // supported values: 2, 4, 8, 16 (G)
 
   BLE.setLocalName(Name);
   BLE.setAdvertisedService(GIK_Service);
@@ -104,6 +125,19 @@ void loop() {
       if (IMU.gyroscopeAvailable()) {
         IMU.readGyroscope(gx_base, gy_base, gz_base);
       }
+      // SPI read from thumb IMU
+      BMI160.readMotionSensor(ax_thumb, ay_thumb, az_thumb, gx_thumb, gy_thumb, gz_thumb); //IMU sensor readings from the thumb IMU
+      
+      ax_tb = convertRawAccel(ax_thumb);
+      ay_tb = convertRawAccel(ay_thumb);
+      az_tb = convertRawAccel(az_thumb);
+
+      gx_tb = convertRawGyro(gx_thumb);
+      gy_tb = convertRawGyro(gy_thumb);
+      gz_tb = convertRawGyro(gz_thumb);
+
+
+
       sample_id++;
 
       uint8_t buf[153];
@@ -123,12 +157,12 @@ void loop() {
       PACK_FLOAT(gz_base);
 
       // thumb
-      PACK_FLOAT(ax_thumb);
-      PACK_FLOAT(ay_thumb);
-      PACK_FLOAT(az_thumb);
-      PACK_FLOAT(gx_thumb);
-      PACK_FLOAT(gy_thumb);
-      PACK_FLOAT(gz_thumb);
+      PACK_FLOAT(ax_tb);
+      PACK_FLOAT(ay_tb);
+      PACK_FLOAT(az_tb);
+      PACK_FLOAT(gx_tb);
+      PACK_FLOAT(gy_tb);
+      PACK_FLOAT(gz_tb);
       PACK_BOOL(f_thumb);
 
       // index
@@ -170,21 +204,42 @@ void loop() {
 
       GIK_tx_Char.writeValue(buf, sizeof(buf));  // send out the packet
 
-      // // debug
-      // Serial.print("id=");
-      // Serial.print(sample_id);
-      // Serial.print(" acc_base=");
-      // Serial.print(ax_base); Serial.print(",");
-      // Serial.print(ay_base); Serial.print(",");
-      // Serial.print(az_base);
-      // Serial.print(" gyro_base=");
-      // Serial.print(gx_base); Serial.print(",");
-      // Serial.print(gy_base); Serial.print(",");
-      // Serial.println(gz_base);
+      // debug
+      Serial.print("id=");
+      Serial.print(sample_id);
+      Serial.print(" acc_base=");
+      Serial.print(ax_tb); Serial.print(",");
+      Serial.print(ay_tb); Serial.print(",");
+      Serial.print(az_tb);
+      Serial.print(" gyro_base=");
+      Serial.print(gx_tb); Serial.print(",");
+      Serial.print(gy_tb); Serial.print(",");
+      Serial.println(gz_tb);
 
       delay(10);  // ~100 Hz
     }
 
     Serial.println("Receiver disconnected");
   }
+}
+
+
+float convertRawGyro(int gRaw) {
+  // since we are using 250 degrees/seconds range
+  // -250 maps to a raw value of -32768
+  // +250 maps to a raw value of 32767
+
+  float g = (gRaw * 250.0) / 32768.0;
+
+  return g;
+}
+
+float convertRawAccel(int aRaw) {
+  // since we are using 250 degrees/seconds range
+  // -250 maps to a raw value of -32768
+  // +250 maps to a raw value of 32767
+
+  float a = (aRaw * (4/32768.0));
+
+  return a;
 }
