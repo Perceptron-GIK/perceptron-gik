@@ -53,7 +53,7 @@ async def _csv_writer(queue: asyncio.Queue, file_name: str ):
                 flush_counter = 0
 
 
-async def csv_writer(queue: asyncio.Queue, side: str):
+def csv_writer(queue: asyncio.Queue, side: str):
     """ Write data from the queue to a csv file. 
 
     Args:
@@ -91,7 +91,7 @@ async def csv_writer(queue: asyncio.Queue, side: str):
         with open(data_file, "w") as f:
             f.write(f"{DATA_HEADER}\n")
             
-    await _csv_writer(queue, data_file)
+    asyncio.create_task(_csv_writer(queue, data_file))
 
 
 def print_data(bluetooth_data: list) -> None:
@@ -204,8 +204,8 @@ async def connect(device_name, uuid, queue):
     nano = await wait_for_nano(device_name)
     print(f"Found GIK {side} Hand")
     
-    # Start ssv writers
-    asyncio.create_task(csv_writer(queue, side))
+    # Start csv writers
+    csv_writer(queue, side)
     
     # Main bluetooth loop
     while True:
