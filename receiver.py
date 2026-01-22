@@ -5,6 +5,7 @@
 # The script utilises threading to run both left and right hand concurrently using asyncio.gather
 #------------------------------------------------------------------------------------------------------
 import asyncio, struct, time, os
+from typing import Callable
 from bleak import BleakScanner, BleakClient
 from datetime import datetime  
 
@@ -52,7 +53,7 @@ async def _csv_writer(queue: asyncio.Queue, file_name: str ):
                 flush_counter = 0
 
 
-async def csv_writer(queue: asyncio.Queue, side: str):
+def csv_writer(queue: asyncio.Queue, side: str):
     """ Write data from the queue to a csv file. 
 
     Args:
@@ -62,6 +63,7 @@ async def csv_writer(queue: asyncio.Queue, side: str):
     
     script_dir = os.path.dirname(os.path.abspath(__file__))  # change if receiver.py is not in the same directory as Data
     data_dir = os.path.join(script_dir, "data")
+    os.makedirs(data_dir, exist_ok=True)
     
     # Maintain Metadata of sessions, so that upon reconnection a new csv file is created
     metadata_file = os.path.join(data_dir,f"metadata_{side}.txt")
@@ -89,7 +91,7 @@ async def csv_writer(queue: asyncio.Queue, side: str):
         with open(data_file, "w") as f:
             f.write(f"{DATA_HEADER}\n")
             
-    await _csv_writer(queue, data_file)
+    asyncio.create_task(_csv_writer(queue, data_file))
 
 
 def print_data(bluetooth_data: list) -> None:
@@ -202,8 +204,8 @@ async def connect(device_name, uuid, queue):
     nano = await wait_for_nano(device_name)
     print(f"Found GIK {side} Hand")
     
-    # Start ssv writers
-    asyncio.create_task(csv_writer(queue, side))
+    # Start csv writers
+    csv_writer(queue, side)
     
     # Main bluetooth loop
     while True:
