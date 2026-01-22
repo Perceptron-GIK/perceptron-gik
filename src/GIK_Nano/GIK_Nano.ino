@@ -22,7 +22,7 @@ Adafruit_BMP280 BMP280;
 const char* Name = Hand_Name;
 
 const int CS_THUMB = 10; // Chip Select pin for talking to thumb IMU
-const int CS_INDEX = 3; // Chip Select  pin for talking to index IMU
+const int CS_INDEX = 9; // Chip Select  pin for talking to index IMU
 const int CS_MIDDLE = 4; // Chip Select  pin for talking to middle IMU
 const int CS_RING = 5; // Chip Select  pin for talking to ring IMU
 const int CS_PINKY = 6; // Chip Select  pin for talking to pinky IMU
@@ -38,8 +38,10 @@ int ax_thumb, ay_thumb, az_thumb; // accelerometer xyz from left thumb
 int gx_thumb, gy_thumb, gz_thumb; // gyro xyz from left thumb
 bool f_thumb = 0; // force sensor boolean for left thumb
 
-float ax_index = 0, ay_index = 0, az_index = 0; // accelerometer xyz from left index
-float gx_index = 0, gy_index = 0, gz_index = 0; // gyro xyz from left index
+
+float ax_id, ay_id, az_id, gx_id, gy_id, gz_id;
+int ax_index = 0, ay_index = 0, az_index = 0; // accelerometer xyz from left index
+int gx_index = 0, gy_index = 0, gz_index = 0; // gyro xyz from left index
 bool f_index = 0; // force sensor boolean for left index
 
 float ax_middle = 0, ay_middle = 0, az_middle = 0; // accelerometer xyz from left midlle 
@@ -97,6 +99,11 @@ void setup() {
   pinMode(LEDG, OUTPUT);
   pinMode(LEDB, OUTPUT);
 
+  pinMode(CS_THUMB, OUTPUT); digitalWrite(CS_THUMB, HIGH);
+  pinMode(CS_INDEX, OUTPUT); digitalWrite(CS_INDEX, HIGH);
+  pinMode(CS_MIDDLE, OUTPUT); digitalWrite(CS_MIDDLE, HIGH);
+  pinMode(CS_RING, OUTPUT); digitalWrite(CS_RING, HIGH);
+  pinMode(CS_PINKY, OUTPUT); digitalWrite(CS_PINKY, HIGH);
 }
 
 void loop() {
@@ -126,8 +133,18 @@ void loop() {
         IMU.readGyroscope(gx_base, gy_base, gz_base);
       }
       // SPI read from thumb IMU
+
+      digitalWrite(CS_THUMB, LOW);
+      delay(1);
       BMI160.readMotionSensor(ax_thumb, ay_thumb, az_thumb, gx_thumb, gy_thumb, gz_thumb); //IMU sensor readings from the thumb IMU
-      
+      digitalWrite(CS_THUMB, HIGH);
+      delay(1);
+      digitalWrite(CS_INDEX, LOW);
+      delay(1);
+      BMI160.readMotionSensor(ax_index, ay_index, az_index, gx_index, gy_index, gz_index); //IMU sensor readings from the thumb IMU
+      digitalWrite(CS_INDEX, HIGH);
+
+
       ax_tb = convertRawAccel(ax_thumb);
       ay_tb = convertRawAccel(ay_thumb);
       az_tb = convertRawAccel(az_thumb);
@@ -135,6 +152,15 @@ void loop() {
       gx_tb = convertRawGyro(gx_thumb);
       gy_tb = convertRawGyro(gy_thumb);
       gz_tb = convertRawGyro(gz_thumb);
+
+      ax_id = convertRawAccel(ax_index);
+      ay_id = convertRawAccel(ay_index);
+      az_id = convertRawAccel(az_index);
+
+      gx_id = convertRawGyro(gx_index);
+      gy_id = convertRawGyro(gy_index);
+      gz_id = convertRawGyro(gz_index);
+
 
 
 
@@ -166,12 +192,12 @@ void loop() {
       PACK_BOOL(f_thumb);
 
       // index
-      PACK_FLOAT(ax_index);
-      PACK_FLOAT(ay_index);
-      PACK_FLOAT(az_index);
-      PACK_FLOAT(gx_index);
-      PACK_FLOAT(gy_index);
-      PACK_FLOAT(gz_index);
+      PACK_FLOAT(ax_id);
+      PACK_FLOAT(ay_id);
+      PACK_FLOAT(az_id);
+      PACK_FLOAT(gx_id);
+      PACK_FLOAT(gy_id);
+      PACK_FLOAT(gz_id);
       PACK_BOOL(f_index);
 
       // middle
@@ -214,7 +240,16 @@ void loop() {
       Serial.print(" gyro_base=");
       Serial.print(gx_tb); Serial.print(",");
       Serial.print(gy_tb); Serial.print(",");
-      Serial.println(gz_tb);
+      Serial.print("id=");
+      Serial.print(sample_id);
+      Serial.print(" acc_base=");
+      Serial.print(ax_id); Serial.print(",");
+      Serial.print(ay_id); Serial.print(",");
+      Serial.print(az_id);
+      Serial.print(" gyro_base=");
+      Serial.print(gx_id); Serial.print(",");
+      Serial.print(gy_id); Serial.print(",");
+      Serial.println(gz_id);
 
       delay(10);  // ~100 Hz
     }
