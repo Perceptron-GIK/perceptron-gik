@@ -1,17 +1,22 @@
-import keyboard
-import csv
-import asyncio
+import keyboard, csv, asyncio, os, threading
 from datetime import datetime
-from typing import Callable
+from typing import Callable, Optional
 
+# This is used to signal the other threads (asyncio) that 
+stop_event = threading.Event()
 
 def _keyboard_listener(keyboard_csv: str):
     """Keyboard listener that records events to CSV."""
     event_count = 0
     
-    f = open(keyboard_csv, 'w', newline='')
+    # If file doesn't exist create it
+    if not os.path.exists(keyboard_csv):
+        with open(keyboard_csv, "w") as f:
+            writer = csv.writer(f)
+            writer.writerow(['event_type', 'scan_code', 'name', 'time'])
+    
+    f = open(keyboard_csv, 'a', newline='')
     writer = csv.writer(f)
-    writer.writerow(['event_type', 'scan_code', 'name', 'time'])
     
     def on_event(event):
         nonlocal event_count
@@ -28,6 +33,7 @@ def _keyboard_listener(keyboard_csv: str):
             keyboard.unhook_all()
             f.flush()
             f.close()
+            stop_event.set()  # Signal all tasks to stop
             print(f"Recording Complete. {event_count} events saved to {keyboard_csv}")
     
     print(f"Recording to {keyboard_csv}... Press ESC to stop.")
@@ -44,7 +50,7 @@ async def start_keyboard(keyboard_csv: str):
     Args:
         keyboard_csv (str): Path to the output CSV file.
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, _keyboard_listener, keyboard_csv)
 
 
