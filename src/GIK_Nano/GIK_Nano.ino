@@ -32,8 +32,8 @@ float ax_base = 0, ay_base = 0, az_base = 0; // accelerometer xyz from left base
 float gx_base = 0, gy_base = 0, gz_base = 0; // gyro xyz from left base
 
 float ax_tb, ay_tb, az_tb, gx_tb, gy_tb, gz_tb;
-int ax_thumb, ay_thumb, az_thumb; // accelerometer xyz from left thumb 
-int gx_thumb, gy_thumb, gz_thumb; // gyro xyz from left thumb
+int ax_thumb = 0, ay_thumb = 0, az_thumb = 0; // accelerometer xyz from left thumb 
+int gx_thumb = 0, gy_thumb = 0, gz_thumb = 0; // gyro xyz from left thumb
 bool f_thumb = 0; // force sensor boolean for left thumb
 
 float ax_id, ay_id, az_id, gx_id, gy_id, gz_id;
