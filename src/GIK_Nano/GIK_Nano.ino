@@ -18,42 +18,42 @@ BLEService GIK_Service(ServiceID);  // service ID
 BLECharacteristic GIK_tx_Char(CharID,BLERead | BLENotify,153); // Characteristic ID with notification and MTU of 153 BYTES
 Adafruit_BMP280 BMP280;
 
-
 const char* Name = Hand_Name;
 
-const int CS_THUMB = 10; // Chip Select pin for talking to thumb IMU
-const int CS_INDEX = 9; // Chip Select  pin for talking to index IMU
-const int CS_MIDDLE = 4; // Chip Select  pin for talking to middle IMU
-const int CS_RING = 5; // Chip Select  pin for talking to ring IMU
-const int CS_PINKY = 6; // Chip Select  pin for talking to pinky IMU
+const int CS_THUMB = 3; // Chip Select pin for talking to thumb IMU
+const int CS_INDEX = 9; // Chip Select pin for talking to index IMU
+const int CS_MIDDLE = 4; // Chip Select pin for talking to middle IMU
+const int CS_RING = 2; // Chip Select pin for talking to ring IMU
+const int CS_PINKY = 6; // Chip Select pin for talking to pinky IMU
 
 // Definition of variables for left hand
 
 float ax_base = 0, ay_base = 0, az_base = 0; // accelerometer xyz from left base 
 float gx_base = 0, gy_base = 0, gz_base = 0; // gyro xyz from left base
 
-
 float ax_tb, ay_tb, az_tb, gx_tb, gy_tb, gz_tb;
 int ax_thumb, ay_thumb, az_thumb; // accelerometer xyz from left thumb 
 int gx_thumb, gy_thumb, gz_thumb; // gyro xyz from left thumb
 bool f_thumb = 0; // force sensor boolean for left thumb
-
 
 float ax_id, ay_id, az_id, gx_id, gy_id, gz_id;
 int ax_index = 0, ay_index = 0, az_index = 0; // accelerometer xyz from left index
 int gx_index = 0, gy_index = 0, gz_index = 0; // gyro xyz from left index
 bool f_index = 0; // force sensor boolean for left index
 
-float ax_middle = 0, ay_middle = 0, az_middle = 0; // accelerometer xyz from left midlle 
-float gx_middle = 0, gy_middle = 0, gz_middle = 0; // gyro xyz from left midlle
+float ax_m, ay_m, az_m, gx_m, gy_m, gz_m;
+int ax_middle = 0, ay_middle = 0, az_middle = 0; // accelerometer xyz from left middle
+int gx_middle = 0, gy_middle = 0, gz_middle = 0; // gyro xyz from left middle
 bool f_middle = 0; // force sensor boolean for left middle
 
-float ax_ring = 0, ay_ring = 0, az_ring = 0; // accelerometer xyz from left ring 
-float gx_ring = 0, gy_ring = 0, gz_ring = 0;  // gyro xyz from left ring
+float ax_r, ay_r, az_r, gx_r, gy_r, gz_r;
+int ax_ring = 0, ay_ring = 0, az_ring = 0; // accelerometer xyz from left ring 
+int gx_ring = 0, gy_ring = 0, gz_ring = 0;  // gyro xyz from left ring
 bool f_ring = 0; // force sensor boolean for left ring
 
-float ax_pinky = 0, ay_pinky = 0, az_pinky = 0; // accelerometer xyz from left pinky
-float gx_pinky = 0, gy_pinky = 0, gz_pinky = 0; // gyro xyz from left pinky
+float ax_p, ay_p, az_p, gx_p, gy_p, gz_p;
+int ax_pinky = 0, ay_pinky = 0, az_pinky = 0; // accelerometer xyz from left pinky
+int gx_pinky = 0, gy_pinky = 0, gz_pinky = 0; // gyro xyz from left pinky
 bool f_pinky = 0; // force sensor boolean for left pinky
 
 // Packet layout (little-endian):
@@ -81,9 +81,12 @@ void setup() {
 
   // Initialise SPI for finger IMUs
   SPI.begin();
-  BMI160.begin(CS_THUMB);
-  BMI160.setGyroRange(250); // supported values: 125, 250, 500, 1000, 2000 (degrees/second)
-  BMI160.setAccelerometerRange(4); // supported values: 2, 4, 8, 16 (G)
+
+  BMI160.begin(CS_THUMB); BMI160.setGyroRange(250); BMI160.setAccelerometerRange(4);
+  BMI160.begin(CS_INDEX); BMI160.setGyroRange(250); BMI160.setAccelerometerRange(4);
+  BMI160.begin(CS_MIDDLE); BMI160.setGyroRange(250); BMI160.setAccelerometerRange(4);
+  BMI160.begin(CS_RING); BMI160.setGyroRange(250); BMI160.setAccelerometerRange(4);
+  BMI160.begin(CS_PINKY); BMI160.setGyroRange(250); BMI160.setAccelerometerRange(4);
 
   BLE.setLocalName(Name);
   BLE.setAdvertisedService(GIK_Service);
@@ -132,23 +135,40 @@ void loop() {
       if (IMU.gyroscopeAvailable()) {
         IMU.readGyroscope(gx_base, gy_base, gz_base);
       }
-      // SPI read from thumb IMU
 
       digitalWrite(CS_THUMB, LOW);
-      delay(1);
-      BMI160.readMotionSensor(ax_thumb, ay_thumb, az_thumb, gx_thumb, gy_thumb, gz_thumb); //IMU sensor readings from the thumb IMU
+      delay(50);
+      BMI160.readMotionSensor(ax_thumb, ay_thumb, az_thumb, gx_thumb, gy_thumb, gz_thumb);
       digitalWrite(CS_THUMB, HIGH);
-      delay(1);
-      digitalWrite(CS_INDEX, LOW);
-      delay(1);
-      BMI160.readMotionSensor(ax_index, ay_index, az_index, gx_index, gy_index, gz_index); //IMU sensor readings from the thumb IMU
-      digitalWrite(CS_INDEX, HIGH);
+      delay(50);  
 
+      digitalWrite(CS_INDEX, LOW);
+      delay(50);  
+      BMI160.readMotionSensor(ax_index, ay_index, az_index, gx_index, gy_index, gz_index);
+      digitalWrite(CS_INDEX, HIGH);
+      delay(50);  
+
+      digitalWrite(CS_MIDDLE, LOW);
+      delay(50);  
+      BMI160.readMotionSensor(ax_middle, ay_middle, az_middle, gx_middle, gy_middle, gz_middle);
+      digitalWrite(CS_MIDDLE, HIGH);
+      delay(50);  
+
+      digitalWrite(CS_RING, LOW);
+      delay(50);  
+      BMI160.readMotionSensor(ax_ring, ay_ring, az_ring, gx_ring, gy_ring, gz_ring);
+      digitalWrite(CS_RING, HIGH);
+      delay(50);  
+
+      digitalWrite(CS_PINKY, LOW);
+      delay(50);  
+      BMI160.readMotionSensor(ax_pinky, ay_pinky, az_pinky, gx_pinky, gy_pinky, gz_pinky);
+      digitalWrite(CS_PINKY, HIGH);
+      delay(50);  
 
       ax_tb = convertRawAccel(ax_thumb);
       ay_tb = convertRawAccel(ay_thumb);
       az_tb = convertRawAccel(az_thumb);
-
       gx_tb = convertRawGyro(gx_thumb);
       gy_tb = convertRawGyro(gy_thumb);
       gz_tb = convertRawGyro(gz_thumb);
@@ -156,13 +176,30 @@ void loop() {
       ax_id = convertRawAccel(ax_index);
       ay_id = convertRawAccel(ay_index);
       az_id = convertRawAccel(az_index);
-
       gx_id = convertRawGyro(gx_index);
       gy_id = convertRawGyro(gy_index);
       gz_id = convertRawGyro(gz_index);
 
+      ax_m = convertRawAccel(ax_middle);
+      ay_m = convertRawAccel(ay_middle);
+      az_m = convertRawAccel(az_middle);
+      gx_m = convertRawGyro(gx_middle);
+      gy_m = convertRawGyro(gy_middle);
+      gz_m = convertRawGyro(gz_middle);
 
+      ax_r = convertRawAccel(ax_ring);
+      ay_r = convertRawAccel(ay_ring);
+      az_r = convertRawAccel(az_ring);
+      gx_r = convertRawGyro(gx_ring);
+      gy_r = convertRawGyro(gy_ring);
+      gz_r = convertRawGyro(gz_ring);
 
+      ax_p = convertRawAccel(ax_pinky);
+      ay_p = convertRawAccel(ay_pinky);
+      az_p = convertRawAccel(az_pinky);
+      gx_p = convertRawGyro(gx_pinky);
+      gy_p = convertRawGyro(gy_pinky);
+      gz_p = convertRawGyro(gz_pinky);
 
       sample_id++;
 
@@ -201,55 +238,33 @@ void loop() {
       PACK_BOOL(f_index);
 
       // middle
-      PACK_FLOAT(ax_middle);
-      PACK_FLOAT(ay_middle);
-      PACK_FLOAT(az_middle);
-      PACK_FLOAT(gx_middle);
-      PACK_FLOAT(gy_middle);
-      PACK_FLOAT(gz_middle);
+      PACK_FLOAT(ax_m);
+      PACK_FLOAT(ay_m);
+      PACK_FLOAT(az_m);
+      PACK_FLOAT(gx_m);
+      PACK_FLOAT(gy_m);
+      PACK_FLOAT(gz_m);
       PACK_BOOL(f_middle);
 
       // ring
-      PACK_FLOAT(ax_ring);
-      PACK_FLOAT(ay_ring);
-      PACK_FLOAT(az_ring);
-      PACK_FLOAT(gx_ring);
-      PACK_FLOAT(gy_ring);
-      PACK_FLOAT(gz_ring);
+      PACK_FLOAT(ax_r);
+      PACK_FLOAT(ay_r);
+      PACK_FLOAT(az_r);
+      PACK_FLOAT(gx_r);
+      PACK_FLOAT(gy_r);
+      PACK_FLOAT(gz_r);
       PACK_BOOL(f_ring);
 
       // pinky
-      PACK_FLOAT(ax_pinky);
-      PACK_FLOAT(ay_pinky);
-      PACK_FLOAT(az_pinky);
-      PACK_FLOAT(gx_pinky);
-      PACK_FLOAT(gy_pinky);
-      PACK_FLOAT(gz_pinky);
+      PACK_FLOAT(ax_p);
+      PACK_FLOAT(ay_p);
+      PACK_FLOAT(az_p);
+      PACK_FLOAT(gx_p);
+      PACK_FLOAT(gy_p);
+      PACK_FLOAT(gz_p);
       PACK_BOOL(f_pinky);
 
-
       GIK_tx_Char.writeValue(buf, sizeof(buf));  // send out the packet
-
-      // debug
-      Serial.print("id=");
-      Serial.print(sample_id);
-      Serial.print(" acc_base=");
-      Serial.print(ax_tb); Serial.print(",");
-      Serial.print(ay_tb); Serial.print(",");
-      Serial.print(az_tb);
-      Serial.print(" gyro_base=");
-      Serial.print(gx_tb); Serial.print(",");
-      Serial.print(gy_tb); Serial.print(",");
-      Serial.print("id=");
-      Serial.print(sample_id);
-      Serial.print(" acc_base=");
-      Serial.print(ax_id); Serial.print(",");
-      Serial.print(ay_id); Serial.print(",");
-      Serial.print(az_id);
-      Serial.print(" gyro_base=");
-      Serial.print(gx_id); Serial.print(",");
-      Serial.print(gy_id); Serial.print(",");
-      Serial.println(gz_id);
 
       delay(10);  // ~100 Hz
     }
@@ -257,7 +272,6 @@ void loop() {
     Serial.println("Receiver disconnected");
   }
 }
-
 
 float convertRawGyro(int gRaw) {
   // since we are using 250 degrees/seconds range
