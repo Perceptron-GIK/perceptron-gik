@@ -23,8 +23,8 @@ const char* Name = Hand_Name;
 
 const int CS_THUMB = 10; // Chip Select pin for talking to thumb IMU
 const int CS_INDEX = 9; // Chip Select  pin for talking to index IMU
-const int CS_MIDDLE = 4; // Chip Select  pin for talking to middle IMU
-const int CS_RING = 5; // Chip Select  pin for talking to ring IMU
+const int CS_MIDDLE = 8; // Chip Select  pin for talking to middle IMU
+const int CS_RING = 7; // Chip Select  pin for talking to ring IMU
 const int CS_PINKY = 6; // Chip Select  pin for talking to pinky IMU
 
 // Definition of variables for left hand
@@ -34,8 +34,8 @@ float gx_base = 0, gy_base = 0, gz_base = 0; // gyro xyz from left base
 
 
 float ax_tb, ay_tb, az_tb, gx_tb, gy_tb, gz_tb;
-int ax_thumb, ay_thumb, az_thumb; // accelerometer xyz from left thumb 
-int gx_thumb, gy_thumb, gz_thumb; // gyro xyz from left thumb
+int ax_thumb = 0, ay_thumb = 0, az_thumb = 0; // accelerometer xyz from left thumb 
+int gx_thumb = 0, gy_thumb = 0, gz_thumb = 0; // gyro xyz from left thumb
 bool f_thumb = 0; // force sensor boolean for left thumb
 
 
@@ -44,16 +44,19 @@ int ax_index = 0, ay_index = 0, az_index = 0; // accelerometer xyz from left ind
 int gx_index = 0, gy_index = 0, gz_index = 0; // gyro xyz from left index
 bool f_index = 0; // force sensor boolean for left index
 
-float ax_middle = 0, ay_middle = 0, az_middle = 0; // accelerometer xyz from left midlle 
-float gx_middle = 0, gy_middle = 0, gz_middle = 0; // gyro xyz from left midlle
+float ax_md, ay_md, az_md, gx_md, gy_md, gz_md;
+int ax_middle = 0, ay_middle = 0, az_middle = 0; // accelerometer xyz from left midlle 
+int gx_middle = 0, gy_middle = 0, gz_middle = 0; // gyro xyz from left midlle
 bool f_middle = 0; // force sensor boolean for left middle
 
-float ax_ring = 0, ay_ring = 0, az_ring = 0; // accelerometer xyz from left ring 
-float gx_ring = 0, gy_ring = 0, gz_ring = 0;  // gyro xyz from left ring
+float ax_rg, ay_rg, az_rg, gx_rg, gy_rg, gz_rg;
+int ax_ring = 0, ay_ring = 0, az_ring = 0; // accelerometer xyz from left ring 
+int gx_ring = 0, gy_ring = 0, gz_ring = 0;  // gyro xyz from left ring
 bool f_ring = 0; // force sensor boolean for left ring
 
-float ax_pinky = 0, ay_pinky = 0, az_pinky = 0; // accelerometer xyz from left pinky
-float gx_pinky = 0, gy_pinky = 0, gz_pinky = 0; // gyro xyz from left pinky
+float ax_py, ay_py, az_py, gx_py, gy_py, gz_py;
+int ax_pinky = 0, ay_pinky = 0, az_pinky = 0; // accelerometer xyz from left pinky
+int gx_pinky = 0, gy_pinky = 0, gz_pinky = 0; // gyro xyz from left pinky
 bool f_pinky = 0; // force sensor boolean for left pinky
 
 // Packet layout (little-endian):
@@ -143,6 +146,21 @@ void loop() {
       delay(1);
       BMI160.readMotionSensor(ax_index, ay_index, az_index, gx_index, gy_index, gz_index); //IMU sensor readings from the thumb IMU
       digitalWrite(CS_INDEX, HIGH);
+      delay(1);
+      digitalWrite(CS_MIDDLE, LOW);
+      delay(1);
+      BMI160.readMotionSensor(ax_middle, ay_middle, az_middle, gx_middle, gy_middle, gz_middle); //IMU sensor readings from the thumb IMU
+      digitalWrite(CS_MIDDLE, HIGH);
+      delay(1);
+      digitalWrite(CS_RING, LOW);
+      delay(1);
+      BMI160.readMotionSensor(ax_ring, ay_ring, az_ring, gx_ring, gy_ring, gz_ring); //IMU sensor readings from the thumb IMU
+      digitalWrite(CS_RING, HIGH);
+      delay(1);
+      digitalWrite(CS_PINKY, LOW);
+      delay(1);
+      BMI160.readMotionSensor(ax_pinky, ay_pinky, az_pinky, gx_pinky, gy_pinky, gz_pinky); //IMU sensor readings from the thumb IMU
+      digitalWrite(CS_PINKY, HIGH);
 
 
       ax_tb = convertRawAccel(ax_thumb);
@@ -160,6 +178,30 @@ void loop() {
       gx_id = convertRawGyro(gx_index);
       gy_id = convertRawGyro(gy_index);
       gz_id = convertRawGyro(gz_index);
+
+      ax_md = convertRawAccel(ax_middle);
+      ay_md = convertRawAccel(ay_middle);
+      az_md = convertRawAccel(az_middle);
+
+      gx_md = convertRawGyro(gx_middle);
+      gy_md = convertRawGyro(gy_middle);
+      gz_md = convertRawGyro(gz_middle);
+
+      ax_rg = convertRawAccel(ax_ring);
+      ay_rg = convertRawAccel(ay_ring);
+      az_rg = convertRawAccel(az_ring);
+
+      gx_rg = convertRawGyro(gx_ring);
+      gy_rg = convertRawGyro(gy_ring);
+      gz_rg = convertRawGyro(gz_ring);
+
+      ax_py = convertRawAccel(ax_pinky);
+      ay_py = convertRawAccel(ay_pinky);
+      az_py = convertRawAccel(az_pinky);
+
+      gx_py = convertRawGyro(gx_pinky);
+      gy_py = convertRawGyro(gy_pinky);
+      gz_py = convertRawGyro(gz_pinky);
 
 
 
@@ -201,30 +243,30 @@ void loop() {
       PACK_BOOL(f_index);
 
       // middle
-      PACK_FLOAT(ax_middle);
-      PACK_FLOAT(ay_middle);
-      PACK_FLOAT(az_middle);
-      PACK_FLOAT(gx_middle);
-      PACK_FLOAT(gy_middle);
-      PACK_FLOAT(gz_middle);
+      PACK_FLOAT(ax_md);
+      PACK_FLOAT(ay_md);
+      PACK_FLOAT(az_md);
+      PACK_FLOAT(gx_md);
+      PACK_FLOAT(gy_md);
+      PACK_FLOAT(gz_md);
       PACK_BOOL(f_middle);
 
       // ring
-      PACK_FLOAT(ax_ring);
-      PACK_FLOAT(ay_ring);
-      PACK_FLOAT(az_ring);
-      PACK_FLOAT(gx_ring);
-      PACK_FLOAT(gy_ring);
-      PACK_FLOAT(gz_ring);
+      PACK_FLOAT(ax_rg);
+      PACK_FLOAT(ay_rg);
+      PACK_FLOAT(az_rg);
+      PACK_FLOAT(gx_rg);
+      PACK_FLOAT(gy_rg);
+      PACK_FLOAT(gz_rg);
       PACK_BOOL(f_ring);
 
       // pinky
-      PACK_FLOAT(ax_pinky);
-      PACK_FLOAT(ay_pinky);
-      PACK_FLOAT(az_pinky);
-      PACK_FLOAT(gx_pinky);
-      PACK_FLOAT(gy_pinky);
-      PACK_FLOAT(gz_pinky);
+      PACK_FLOAT(ax_py);
+      PACK_FLOAT(ay_py);
+      PACK_FLOAT(az_py);
+      PACK_FLOAT(gx_py);
+      PACK_FLOAT(gy_py);
+      PACK_FLOAT(gz_py);
       PACK_BOOL(f_pinky);
 
 
@@ -233,23 +275,46 @@ void loop() {
       // debug
       Serial.print("id=");
       Serial.print(sample_id);
-      Serial.print(" acc_base=");
+      Serial.print(" acc=");
       Serial.print(ax_tb); Serial.print(",");
       Serial.print(ay_tb); Serial.print(",");
       Serial.print(az_tb);
-      Serial.print(" gyro_base=");
+      Serial.print(" gyro=");
       Serial.print(gx_tb); Serial.print(",");
       Serial.print(gy_tb); Serial.print(",");
-      Serial.print("id=");
-      Serial.print(sample_id);
-      Serial.print(" acc_base=");
+      Serial.print(gz_tb); Serial.print(",");
+      Serial.print(" acc=");
       Serial.print(ax_id); Serial.print(",");
       Serial.print(ay_id); Serial.print(",");
       Serial.print(az_id);
-      Serial.print(" gyro_base=");
+      Serial.print(" gyro=");
       Serial.print(gx_id); Serial.print(",");
       Serial.print(gy_id); Serial.print(",");
-      Serial.println(gz_id);
+      Serial.print(gz_id);
+      Serial.print(" acc=");
+      Serial.print(ax_md); Serial.print(",");
+      Serial.print(ay_md); Serial.print(",");
+      Serial.print(az_md);
+      Serial.print(" gyro=");
+      Serial.print(gx_md); Serial.print(",");
+      Serial.print(gy_md); Serial.print(",");
+      Serial.print(gz_md);
+      Serial.print(" acc=");
+      Serial.print(ax_rg); Serial.print(",");
+      Serial.print(ay_rg); Serial.print(",");
+      Serial.print(az_rg);
+      Serial.print(" gyro=");
+      Serial.print(gx_rg); Serial.print(",");
+      Serial.print(gy_rg); Serial.print(",");
+      Serial.print(gz_rg);
+      Serial.print(" acc=");
+      Serial.print(ax_py); Serial.print(",");
+      Serial.print(ay_py); Serial.print(",");
+      Serial.print(az_py);
+      Serial.print(" gyro=");
+      Serial.print(gx_py); Serial.print(",");
+      Serial.print(gy_py); Serial.print(",");
+      Serial.println(gz_py);
 
       delay(10);  // ~100 Hz
     }
