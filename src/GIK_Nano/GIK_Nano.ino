@@ -14,6 +14,12 @@
 #include <Adafruit_BMP280.h>
 #include <BMI160Gen.h>
 
+BMI160GenClass BMI160_thumb;
+BMI160GenClass BMI160_index;
+BMI160GenClass BMI160_middle;
+BMI160GenClass BMI160_ring;
+BMI160GenClass BMI160_pinky;
+
 BLEService GIK_Service(ServiceID);  // service ID
 BLECharacteristic GIK_tx_Char(CharID,BLERead | BLENotify,153); // Characteristic ID with notification and MTU of 153 BYTES
 Adafruit_BMP280 BMP280;
@@ -22,8 +28,8 @@ const char* Name = Hand_Name;
 
 const int CS_THUMB = 3; // Chip Select pin for talking to thumb IMU
 const int CS_INDEX = 9; // Chip Select pin for talking to index IMU
-const int CS_MIDDLE = 4; // Chip Select pin for talking to middle IMU
-const int CS_RING = 2; // Chip Select pin for talking to ring IMU
+const int CS_MIDDLE = 8; // Chip Select pin for talking to middle IMU
+const int CS_RING = 7; // Chip Select pin for talking to ring IMU
 const int CS_PINKY = 6; // Chip Select pin for talking to pinky IMU
 
 // Definition of variables for left hand
@@ -69,6 +75,8 @@ uint32_t sample_id = 0; // to label the packets
 void setup() {
   Serial.begin(9600);
 
+  Serial.println("After Serial");
+
   if (!IMU.begin()) {
     Serial.println("Failed to initialize IMU!");
     while (1);
@@ -81,12 +89,44 @@ void setup() {
 
   // Initialise SPI for finger IMUs
   SPI.begin();
+  Serial.println("After SPI");
 
-  BMI160.begin(CS_THUMB); BMI160.setGyroRange(250); BMI160.setAccelerometerRange(4);
-  BMI160.begin(CS_INDEX); BMI160.setGyroRange(250); BMI160.setAccelerometerRange(4);
-  BMI160.begin(CS_MIDDLE); BMI160.setGyroRange(250); BMI160.setAccelerometerRange(4);
-  BMI160.begin(CS_RING); BMI160.setGyroRange(250); BMI160.setAccelerometerRange(4);
-  BMI160.begin(CS_PINKY); BMI160.setGyroRange(250); BMI160.setAccelerometerRange(4);
+  // Set all CS pins HIGH (deselected) before initializing
+  pinMode(CS_THUMB, OUTPUT);  digitalWrite(CS_THUMB, HIGH);
+  pinMode(CS_INDEX, OUTPUT);  digitalWrite(CS_INDEX, HIGH);
+  pinMode(CS_MIDDLE, OUTPUT); digitalWrite(CS_MIDDLE, HIGH);
+  pinMode(CS_RING, OUTPUT);   digitalWrite(CS_RING, HIGH);
+  pinMode(CS_PINKY, OUTPUT);  digitalWrite(CS_PINKY, HIGH);
+
+  Serial.println("Before Init");
+  
+  // Initialize each BMI160 one at a time (CS pin only - library auto-detects SPI)
+  BMI160_thumb.begin(CS_THUMB);
+  BMI160_thumb.setGyroRange(250);
+  BMI160_thumb.setAccelerometerRange(4);
+  Serial.print("THUMB ID: "); Serial.println(BMI160_thumb.getDeviceID(), HEX);
+
+  BMI160_index.begin(CS_INDEX);
+  BMI160_index.setGyroRange(250);
+  BMI160_index.setAccelerometerRange(4);
+  Serial.print("INDEX ID: "); Serial.println(BMI160_index.getDeviceID(), HEX);
+
+  BMI160_middle.begin(CS_MIDDLE);
+  BMI160_middle.setGyroRange(250);
+  BMI160_middle.setAccelerometerRange(4);
+  Serial.print("MIDDLE ID: "); Serial.println(BMI160_middle.getDeviceID(), HEX);
+
+  BMI160_ring.begin(CS_RING);
+  BMI160_ring.setGyroRange(250);
+  BMI160_ring.setAccelerometerRange(4);
+  Serial.print("RING ID: "); Serial.println(BMI160_ring.getDeviceID(), HEX);
+
+  BMI160_pinky.begin(CS_PINKY);
+  BMI160_pinky.setGyroRange(250);
+  BMI160_pinky.setAccelerometerRange(4);
+  Serial.print("PINKY ID: "); Serial.println(BMI160_pinky.getDeviceID(), HEX);
+
+  Serial.println("After Init");
 
   BLE.setLocalName(Name);
   BLE.setAdvertisedService(GIK_Service);
@@ -102,11 +142,6 @@ void setup() {
   pinMode(LEDG, OUTPUT);
   pinMode(LEDB, OUTPUT);
 
-  pinMode(CS_THUMB, OUTPUT); digitalWrite(CS_THUMB, HIGH);
-  pinMode(CS_INDEX, OUTPUT); digitalWrite(CS_INDEX, HIGH);
-  pinMode(CS_MIDDLE, OUTPUT); digitalWrite(CS_MIDDLE, HIGH);
-  pinMode(CS_RING, OUTPUT); digitalWrite(CS_RING, HIGH);
-  pinMode(CS_PINKY, OUTPUT); digitalWrite(CS_PINKY, HIGH);
 }
 
 void loop() {
@@ -136,35 +171,12 @@ void loop() {
         IMU.readGyroscope(gx_base, gy_base, gz_base);
       }
 
-      digitalWrite(CS_THUMB, LOW);
-      delay(50);
-      BMI160.readMotionSensor(ax_thumb, ay_thumb, az_thumb, gx_thumb, gy_thumb, gz_thumb);
-      digitalWrite(CS_THUMB, HIGH);
-      delay(50);  
-
-      digitalWrite(CS_INDEX, LOW);
-      delay(50);  
-      BMI160.readMotionSensor(ax_index, ay_index, az_index, gx_index, gy_index, gz_index);
-      digitalWrite(CS_INDEX, HIGH);
-      delay(50);  
-
-      digitalWrite(CS_MIDDLE, LOW);
-      delay(50);  
-      BMI160.readMotionSensor(ax_middle, ay_middle, az_middle, gx_middle, gy_middle, gz_middle);
-      digitalWrite(CS_MIDDLE, HIGH);
-      delay(50);  
-
-      digitalWrite(CS_RING, LOW);
-      delay(50);  
-      BMI160.readMotionSensor(ax_ring, ay_ring, az_ring, gx_ring, gy_ring, gz_ring);
-      digitalWrite(CS_RING, HIGH);
-      delay(50);  
-
-      digitalWrite(CS_PINKY, LOW);
-      delay(50);  
-      BMI160.readMotionSensor(ax_pinky, ay_pinky, az_pinky, gx_pinky, gy_pinky, gz_pinky);
-      digitalWrite(CS_PINKY, HIGH);
-      delay(50);  
+      // Read each finger IMU - library handles CS internally after begin()
+      BMI160_thumb.readMotionSensor(ax_thumb, ay_thumb, az_thumb, gx_thumb, gy_thumb, gz_thumb);
+      BMI160_index.readMotionSensor(ax_index, ay_index, az_index, gx_index, gy_index, gz_index);
+      BMI160_middle.readMotionSensor(ax_middle, ay_middle, az_middle, gx_middle, gy_middle, gz_middle);
+      BMI160_ring.readMotionSensor(ax_ring, ay_ring, az_ring, gx_ring, gy_ring, gz_ring);
+      BMI160_pinky.readMotionSensor(ax_pinky, ay_pinky, az_pinky, gx_pinky, gy_pinky, gz_pinky);
 
       ax_tb = convertRawAccel(ax_thumb);
       ay_tb = convertRawAccel(ay_thumb);
