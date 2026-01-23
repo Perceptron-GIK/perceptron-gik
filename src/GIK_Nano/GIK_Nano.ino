@@ -32,6 +32,15 @@ const int CS_MIDDLE = 8; // Chip Select pin for talking to middle IMU
 const int CS_RING = 7; // Chip Select pin for talking to ring IMU
 const int CS_PINKY = 6; // Chip Select pin for talking to pinky IMU
 
+// Define FSR Pins
+
+#define FSR1_PIN A0
+#define FSR2_PIN A1
+#define FSR3_PIN A2
+#define FSR4_PIN A3
+#define FSR5_PIN A6
+#define THRESHOLD 450
+
 // Definition of variables for left hand
 
 float ax_base = 0, ay_base = 0, az_base = 0; // accelerometer xyz from left base 
@@ -40,27 +49,22 @@ float gx_base = 0, gy_base = 0, gz_base = 0; // gyro xyz from left base
 float ax_tb, ay_tb, az_tb, gx_tb, gy_tb, gz_tb;
 int ax_thumb = 0, ay_thumb = 0, az_thumb = 0; // accelerometer xyz from left thumb 
 int gx_thumb = 0, gy_thumb = 0, gz_thumb = 0; // gyro xyz from left thumb
-bool f_thumb = 0; // force sensor boolean for left thumb
 
 float ax_id, ay_id, az_id, gx_id, gy_id, gz_id;
 int ax_index = 0, ay_index = 0, az_index = 0; // accelerometer xyz from left index
 int gx_index = 0, gy_index = 0, gz_index = 0; // gyro xyz from left index
-bool f_index = 0; // force sensor boolean for left index
 
 float ax_m, ay_m, az_m, gx_m, gy_m, gz_m;
 int ax_middle = 0, ay_middle = 0, az_middle = 0; // accelerometer xyz from left middle
 int gx_middle = 0, gy_middle = 0, gz_middle = 0; // gyro xyz from left middle
-bool f_middle = 0; // force sensor boolean for left middle
 
 float ax_r, ay_r, az_r, gx_r, gy_r, gz_r;
 int ax_ring = 0, ay_ring = 0, az_ring = 0; // accelerometer xyz from left ring 
 int gx_ring = 0, gy_ring = 0, gz_ring = 0;  // gyro xyz from left ring
-bool f_ring = 0; // force sensor boolean for left ring
 
 float ax_p, ay_p, az_p, gx_p, gy_p, gz_p;
 int ax_pinky = 0, ay_pinky = 0, az_pinky = 0; // accelerometer xyz from left pinky
 int gx_pinky = 0, gy_pinky = 0, gz_pinky = 0; // gyro xyz from left pinky
-bool f_pinky = 0; // force sensor boolean for left pinky
 
 // Packet layout (little-endian):
 // uint32  sample_id
@@ -170,6 +174,12 @@ void loop() {
       if (IMU.gyroscopeAvailable()) {
         IMU.readGyroscope(gx_base, gy_base, gz_base);
       }
+
+      bool f_thumb = analogRead(FSR1_PIN) > THRESHOLD ? 1 : 0;
+      bool f_index = analogRead(FSR2_PIN) > THRESHOLD ? 1 : 0;
+      bool f_middle = analogRead(FSR3_PIN) > THRESHOLD ? 1 : 0;
+      bool f_ring = analogRead(FSR4_PIN) > THRESHOLD ? 1 : 0;
+      bool f_pinky = analogRead(FSR5_PIN) > THRESHOLD ? 1 : 0;
 
       // Read each finger IMU - library handles CS internally after begin()
       BMI160_thumb.readMotionSensor(ax_thumb, ay_thumb, az_thumb, gx_thumb, gy_thumb, gz_thumb);
