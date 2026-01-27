@@ -25,9 +25,9 @@ DEVICE_SEARCH_RATE = 2.0       # Frequency with which Bleak searches for a bluet
 RECEIVE_RATE       = 100.0     # Frequency of packets being received in hertz (ensure its is float)
 MAX_QUEUE_SIZE = RECEIVE_RATE * 2 # Allow backlog of 2 seconds as
 
-OVERRIDE_SESSION_ID = True
+OVERRIDE_SESSION_ID = False
 RIGHT_SESSION_ID = None 
-LEFT_SESSION_ID = 1
+LEFT_SESSION_ID = None
 KEYBOARD_SESSION_ID = 1
 
 DATA_HEADER = "sample_id,time_stamp,ax_base,ay_base,az_base,gx_base,gy_base,gz_base,ax_thumb,ay_thumb,az_thumb,gx_thumb,gy_thumb,gz_thumb,f_thumb,ax_index,ay_index,az_index,gx_index,gy_index,gz_index,f_index,ax_middle,ay_middle,az_middle,gx_middle,gy_middle,gz_middle,f_middle,ax_ring,ay_ring,az_ring,gx_ring,gy_ring,gz_ring,f_ring,ax_pinky,ay_pinky,az_pinky,gx_pinky,gy_pinky,gz_pinky,f_pinky"
@@ -94,7 +94,7 @@ async def _csv_writer(queue: asyncio.Queue, file_name: str ):
         while True:
             data,t = await queue.get()
             data = list(data) # Convert to list to use join
-            t = str(time) # convert from float() to string
+            t = str(t) # convert from float() to string
             data.append(t)
 
             # Convert to CSV format
