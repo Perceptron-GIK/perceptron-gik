@@ -99,6 +99,11 @@ async def _csv_writer(queue: asyncio.Queue, file_name: str ):
 
             # Convert to CSV format
             data = ','.join(str(x) for x in data)
+            f.write(f"{data}\n")
+            flush_counter += 1
+            if flush_counter >= RECEIVE_RATE: # Write to the file every second
+                f.flush()
+                flush_counter = 0
 
 
 
@@ -209,15 +214,6 @@ async def wait_for_nano(device_name):
             lambda d, ad: d.name == device_name,
             timeout=1/DEVICE_SEARCH_RATE
         )
-        
-    # while nano is None:
-    #     devices = await BleakScanner.discover()
-    #     for d in devices:
-    #         if d.name == device_name:
-    #             nano = d
-    #             break
-    #     if nano is None:
-    #         await asyncio.sleep(1/DEVICE_SEARCH_RATE)  # wait 1/DEVICE_SEARCH_RATE seconds then scan again
     print(nano)
     return nano
 
