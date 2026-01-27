@@ -22,8 +22,8 @@ const char* Name = Hand_Name;
 
 const int CS_THUMB = 3; // Chip Select pin for talking to thumb IMU
 const int CS_INDEX = 9; // Chip Select pin for talking to index IMU
-const int CS_MIDDLE = 4; // Chip Select pin for talking to middle IMU
-const int CS_RING = 2; // Chip Select pin for talking to ring IMU
+const int CS_MIDDLE = 8; // Chip Select pin for talking to middle IMU
+const int CS_RING = 7; // Chip Select pin for talking to ring IMU
 const int CS_PINKY = 6; // Chip Select pin for talking to pinky IMU
 
 // Definition of variables for left hand
