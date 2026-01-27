@@ -7,7 +7,8 @@
 import asyncio, struct, time, os
 from typing import Callable
 from bleak import BleakScanner, BleakClient
-from datetime import datetime  
+from datetime import datetime
+from src.keyboard.keyboard_ext import start_keyboard, stop_event
 
 # CONSTANTS 
 DEVICE_NAME_L = "GIK_Nano_L" # Left hand nano name
