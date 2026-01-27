@@ -22,6 +22,7 @@ assert struct.calcsize(PACKER_DTYPE_DEF) == 153 # match the packet size
 
 DEVICE_SEARCH_RATE = 2.0       # Frequency with which Bleak searches for a bluetooth device (ensure its is float)
 RECEIVE_RATE       = 100.0     # Frequency of packets being received in hertz (ensure its is float)
+MAX_QUEUE_SIZE = RECEIVE_RATE * 2 # Allow backlog of 2 seconds as
 
 OVERRIDE_SESSION_ID = False
 RIGHT_SESSION_ID = None 
@@ -30,8 +31,8 @@ LEFT_SESSION_ID = None
 DATA_HEADER = "sample_id,time_stamp,ax_base,ay_base,az_base,gx_base,gy_base,gz_base,ax_thumb,ay_thumb,az_thumb,gx_thumb,gy_thumb,gz_thumb,f_thumb,ax_index,ay_index,az_index,gx_index,gy_index,gz_index,f_index,ax_middle,ay_middle,az_middle,gx_middle,gy_middle,gz_middle,f_middle,ax_ring,ay_ring,az_ring,gx_ring,gy_ring,gz_ring,f_ring,ax_pinky,ay_pinky,az_pinky,gx_pinky,gy_pinky,gz_pinky,f_pinky"
 
 # INITIALISATION   
-data_queue_left = asyncio.Queue()
-data_queue_right = asyncio.Queue()
+data_queue_left = asyncio.Queue(MAX_QUEUE_SIZE)
+data_queue_right = asyncio.Queue(MAX_QUEUE_SIZE)
 
 
 async def _csv_writer(queue: asyncio.Queue, file_name: str ):
@@ -46,7 +47,14 @@ async def _csv_writer(queue: asyncio.Queue, file_name: str ):
         
         # Main writer logic loop
         while True:
-            data = await queue.get()
+            data,t = await queue.get()
+            data = list(data) # Convert to list to use join
+            t = str(time) # convert from float() to string
+            data.append(t)
+
+            # Convert to CSV format
+            data = ','.join(str(x) for x in data)
+
             f.write(f"{data}\n")
             flush_counter += 1
             if flush_counter >= RECEIVE_RATE: # Write to the file every second
@@ -172,25 +180,28 @@ def handler_closure(queue: asyncio.Queue , side: str) -> Callable[[object, bytes
     
         # Timestamp data
         t = time.time()
-        ts_string = datetime.fromtimestamp(t).strftime("%H:%M:%S.%f")[:-3]  # HH:MM:SS.mmm
-        received_data.insert(1, ts_string)
-        
-        # Push data into the queue
-        queue.put_nowait(','.join(str(x) for x in received_data))
 
+        #insert to queue
+        queue.put_nowait((received_data,t))
     return handler 
 
 
 async def wait_for_nano(device_name):
     nano = None
     while nano is None:
-        devices = await BleakScanner.discover()
-        for d in devices:
-            if d.name == device_name:
-                nano = d
-                break
-        if nano is None:
-            await asyncio.sleep(1/DEVICE_SEARCH_RATE)  # wait 1/DEVICE_SEARCH_RATE seconds then scan again
+        nano = await BleakScanner.find_device_by_filter(
+            lambda d, ad: d.name == device_name,
+            timeout=1/DEVICE_SEARCH_RATE
+        )
+        
+    # while nano is None:
+    #     devices = await BleakScanner.discover()
+    #     for d in devices:
+    #         if d.name == device_name:
+    #             nano = d
+    #             break
+    #     if nano is None:
+    #         await asyncio.sleep(1/DEVICE_SEARCH_RATE)  # wait 1/DEVICE_SEARCH_RATE seconds then scan again
     print(nano)
     return nano
 
@@ -201,6 +212,7 @@ async def connect(device_name, uuid, queue):
         side = "Right"
     elif "_L" in device_name:
         side = "Left"
+        # device_name = "Arduino"
 
     nano = await wait_for_nano(device_name)
     print(f"Found GIK {side} Hand")
