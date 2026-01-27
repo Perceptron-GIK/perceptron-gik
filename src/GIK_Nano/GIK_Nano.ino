@@ -182,11 +182,25 @@ void loop() {
       bool f_pinky = analogRead(FSR5_PIN) > THRESHOLD ? 1 : 0;
 
       // Read each finger IMU - library handles CS internally after begin()
-      BMI160_thumb.readMotionSensor(ax_thumb, ay_thumb, az_thumb, gx_thumb, gy_thumb, gz_thumb);
-      BMI160_index.readMotionSensor(ax_index, ay_index, az_index, gx_index, gy_index, gz_index);
-      BMI160_middle.readMotionSensor(ax_middle, ay_middle, az_middle, gx_middle, gy_middle, gz_middle);
-      BMI160_ring.readMotionSensor(ax_ring, ay_ring, az_ring, gx_ring, gy_ring, gz_ring);
-      BMI160_pinky.readMotionSensor(ax_pinky, ay_pinky, az_pinky, gx_pinky, gy_pinky, gz_pinky);
+      digitalWrite(CS_THUMB, LOW);
+      BMI160.readMotionSensor(ax_thumb, ay_thumb, az_thumb, gx_thumb, gy_thumb, gz_thumb);
+      digitalWrite(CS_THUMB, HIGH);
+
+      digitalWrite(CS_INDEX, LOW); 
+      BMI160.readMotionSensor(ax_index, ay_index, az_index, gx_index, gy_index, gz_index);
+      digitalWrite(CS_INDEX, HIGH);
+
+      digitalWrite(CS_MIDDLE, LOW);
+      BMI160.readMotionSensor(ax_middle, ay_middle, az_middle, gx_middle, gy_middle, gz_middle);
+      digitalWrite(CS_MIDDLE, HIGH);
+
+      digitalWrite(CS_RING, LOW); 
+      BMI160.readMotionSensor(ax_ring, ay_ring, az_ring, gx_ring, gy_ring, gz_ring);
+      digitalWrite(CS_RING, HIGH); 
+
+      digitalWrite(CS_PINKY, LOW);
+      BMI160.readMotionSensor(ax_pinky, ay_pinky, az_pinky, gx_pinky, gy_pinky, gz_pinky);
+      digitalWrite(CS_PINKY, HIGH);
 
       ax_tb = convertRawAccel(ax_thumb);
       ay_tb = convertRawAccel(ay_thumb);
