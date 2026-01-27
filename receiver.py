@@ -8,10 +8,12 @@ import asyncio, struct, time, os
 from typing import Callable
 from bleak import BleakScanner, BleakClient
 from datetime import datetime  
+from src.keyboard.keyboard_ext import start_keyboard, stop_event
 
 # CONSTANTS 
 DEVICE_NAME_L = "GIK_Nano_L" # Left hand nano name
 DEVICE_NAME_R = "GIK_Nano_R" # Right hand nano name
+KEYBOARD_NAME = "Keyboard"
 
 UUID_TX_L = "00001235-0000-1000-8000-00805f9b34fb" # Left hand TX characteristic UUID
 UUID_TX_R = "00001237-0000-1000-8000-00805f9b34fb" # Right hand TX characteristic UUID
@@ -22,15 +24,59 @@ assert struct.calcsize(PACKER_DTYPE_DEF) == 153 # match the packet size
 DEVICE_SEARCH_RATE = 2.0       # Frequency with which Bleak searches for a bluetooth device (ensure its is float)
 RECEIVE_RATE       = 100.0     # Frequency of packets being received in hertz (ensure its is float)
 
-OVERRIDE_SESSION_ID = False
+OVERRIDE_SESSION_ID = True
 RIGHT_SESSION_ID = None 
-LEFT_SESSION_ID = None
+LEFT_SESSION_ID = 1
+KEYBOARD_SESSION_ID = 1
 
 DATA_HEADER = "sample_id,time_stamp,ax_base,ay_base,az_base,gx_base,gy_base,gz_base,ax_thumb,ay_thumb,az_thumb,gx_thumb,gy_thumb,gz_thumb,f_thumb,ax_index,ay_index,az_index,gx_index,gy_index,gz_index,f_index,ax_middle,ay_middle,az_middle,gx_middle,gy_middle,gz_middle,f_middle,ax_ring,ay_ring,az_ring,gx_ring,gy_ring,gz_ring,f_ring,ax_pinky,ay_pinky,az_pinky,gx_pinky,gy_pinky,gz_pinky,f_pinky"
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(SCRIPT_DIR, "data")
 
 # INITIALISATION   
 data_queue_left = asyncio.Queue()
 data_queue_right = asyncio.Queue()
+keyboard_started = False
+
+
+def get_session_file(name: str) -> str:
+    """Get a CSV file path with session ID
+    
+    Creates data directory if needed, manages session metadata, and returns
+    the path for the new session's CSV file.
+    
+    Args:
+        name: Identifier for the data source (e.g., 'Left', 'Right', 'Keyboard')
+    
+    Returns:
+        Path to the CSV file for this session (e.g., 'data/Left_1.csv')
+    """
+    os.makedirs(DATA_DIR, exist_ok=True)
+    
+    metadata_file = os.path.join(DATA_DIR, f"metadata_{name}.txt")
+    session_id = None
+    
+    # Handle override for Left/Right
+    if OVERRIDE_SESSION_ID :
+        if name == "Left":
+            session_id = LEFT_SESSION_ID 
+        elif name == "Right" :
+            session_id = RIGHT_SESSION_ID
+        else :
+            session_id = KEYBOARD_SESSION_ID
+            
+    elif os.path.exists(metadata_file):
+        with open(metadata_file, "r") as m:
+            session_id = int(m.readline().rstrip()) + 1
+        with open(metadata_file, "w") as m:
+            m.write(f"{session_id}\n")
+    else:
+        with open(metadata_file, "w") as m:
+            m.write("1\n")
+            session_id = 1
+    
+    return os.path.join(DATA_DIR, f"{name}_{session_id}.csv")
 
 
 async def _csv_writer(queue: asyncio.Queue, file_name: str ):
@@ -54,40 +100,15 @@ async def _csv_writer(queue: asyncio.Queue, file_name: str ):
 
 
 def csv_writer(queue: asyncio.Queue, side: str):
-    """ Write data from the queue to a csv file. 
+    """Write data from the queue to a csv file.
 
     Args:
         queue (asyncio.Queue): Queue either Left or Right from which we want to extract data
         side (str): specifies the arduino (either Left or Right) supplying our data
     """
+    data_file = get_session_file(side)
     
-    script_dir = os.path.dirname(os.path.abspath(__file__))  # change if receiver.py is not in the same directory as Data
-    data_dir = os.path.join(script_dir, "data")
-    os.makedirs(data_dir, exist_ok=True)
-    
-    # Maintain Metadata of sessions, so that upon reconnection a new csv file is created
-    metadata_file = os.path.join(data_dir,f"metadata_{side}.txt")
-    session_id  = None
-    
-    if OVERRIDE_SESSION_ID:
-        session_id = RIGHT_SESSION_ID if side == "Right" else LEFT_SESSION_ID
-    
-    elif os.path.exists(metadata_file):
-        # Increment session_id to start new session
-        with open(metadata_file, "r") as m:
-            session_id = int(m.readline().rstrip()) + 1
-        with open(metadata_file, "w") as m:
-            m.write(f"{session_id}\n")
-    else: 
-        # metadata file doesn't exist
-        with open(metadata_file, "w") as m:
-            m.write("1\n") # start with session_id 1
-            session_id = 1
-            
-    data_file = os.path.join(data_dir, f"{side}_{session_id}.csv") # change if receiver.py is not in the same directory as Data
-    
-    if not(os.path.exists(data_file)):
-        # write headers for a new csv file
+    if not os.path.exists(data_file):
         with open(data_file, "w") as f:
             f.write(f"{DATA_HEADER}\n")
             
@@ -195,7 +216,9 @@ async def wait_for_nano(device_name):
 
 
 async def connect(device_name, uuid, queue):
-    # To distingiush left and right from the device name
+    global keyboard_started
+    
+    # To distinguish left and right from the device name
     if "_R" in device_name:
         side = "Right"
     elif "_L" in device_name:
@@ -204,22 +227,28 @@ async def connect(device_name, uuid, queue):
     nano = await wait_for_nano(device_name)
     print(f"Found GIK {side} Hand")
     
+    # Start keyboard logging on first connection
+    if not keyboard_started:
+        keyboard_started = True
+        keyboard_file = get_session_file(KEYBOARD_NAME)
+        asyncio.create_task(start_keyboard(keyboard_file))
+        print(f"Started keyboard logging at {keyboard_file}")
+    
     # Start csv writers
     csv_writer(queue, side)
     
     # Main bluetooth loop
-    while True:
+    while not stop_event.is_set():
         async with BleakClient(nano.address) as client:
             # Upon receiving notification from the nano we call the handler function
-            await client.start_notify(uuid, handler_closure(queue, side)) # Activate notifications/indications on the characteristic.
-            while client.is_connected:
-                # Match the Nano loop rate (RECEIVE_RATE = 100Hz)
+            await client.start_notify(uuid, handler_closure(queue, side))
+            while client.is_connected and not stop_event.is_set():
                 await asyncio.sleep(1/RECEIVE_RATE)
 
 
 async def main():
     print(f"Waiting for GIK to appear...")
-    await asyncio.gather(connect(DEVICE_NAME_L, UUID_TX_L, data_queue_left), connect(DEVICE_NAME_R, UUID_TX_R, data_queue_right)) # Run both left and right concurrently, asyncio handles the threading
-
+    # Run both left and right hand connections concurrently
+    await asyncio.gather(connect(DEVICE_NAME_L, UUID_TX_L, data_queue_left), connect(DEVICE_NAME_R, UUID_TX_R, data_queue_right))
 
 asyncio.run(main())
