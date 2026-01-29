@@ -20,8 +20,7 @@ def _keyboard_listener(keyboard_csv: str):
     
     def on_event(event):
         nonlocal event_count
-        time_custom = datetime.fromtimestamp(event.time).strftime("%H:%M:%S.%f")[:-3]
-        writer.writerow([event.event_type, event.scan_code, event.name, time_custom])
+        writer.writerow([event.event_type, event.scan_code, event.name, event.time])
         event_count += 1
         
         # Save every 10 keys
