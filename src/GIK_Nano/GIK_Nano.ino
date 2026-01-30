@@ -9,35 +9,62 @@
 #include <ArduinoBLE.h>
 #include "Arduino_BMI270_BMM150.h"
 
+// For Finger IMU libraries
+#include <SPI.h>
+#include <Adafruit_BMP280.h>
+#include <BMI160Gen.h>
+
+BMI160GenClass BMI160_thumb;
+BMI160GenClass BMI160_index;
+BMI160GenClass BMI160_middle;
+BMI160GenClass BMI160_ring;
+BMI160GenClass BMI160_pinky;
+
 BLEService GIK_Service(ServiceID);  // service ID
 BLECharacteristic GIK_tx_Char(CharID,BLERead | BLENotify,153); // Characteristic ID with notification and MTU of 153 BYTES
+Adafruit_BMP280 BMP280;
 
 const char* Name = Hand_Name;
+
+const int CS_THUMB = 3; // Chip Select pin for talking to thumb IMU
+const int CS_INDEX = 9; // Chip Select pin for talking to index IMU
+const int CS_MIDDLE = 8; // Chip Select pin for talking to middle IMU
+const int CS_RING = 7; // Chip Select pin for talking to ring IMU
+const int CS_PINKY = 6; // Chip Select pin for talking to pinky IMU
+
+// Define FSR Pins
+
+#define FSR1_PIN A0
+#define FSR2_PIN A1
+#define FSR3_PIN A2
+#define FSR4_PIN A3
+#define FSR5_PIN A6
+#define THRESHOLD 450
 
 // Definition of variables for left hand
 
 float ax_base = 0, ay_base = 0, az_base = 0; // accelerometer xyz from left base 
 float gx_base = 0, gy_base = 0, gz_base = 0; // gyro xyz from left base
 
-float ax_thumb = 0, ay_thumb = 0, az_thumb = 0; // accelerometer xyz from left thumb 
-float gx_thumb = 0, gy_thumb = 0, gz_thumb = 0; // gyro xyz from left thumb
-bool f_thumb = 0; // force sensor boolean for left thumb
+float ax_tb, ay_tb, az_tb, gx_tb, gy_tb, gz_tb;
+int ax_thumb = 0, ay_thumb = 0, az_thumb = 0; // accelerometer xyz from left thumb 
+int gx_thumb = 0, gy_thumb = 0, gz_thumb = 0; // gyro xyz from left thumb
 
-float ax_index = 0, ay_index = 0, az_index = 0; // accelerometer xyz from left index
-float gx_index = 0, gy_index = 0, gz_index = 0; // gyro xyz from left index
-bool f_index = 0; // force sensor boolean for left index
+float ax_id, ay_id, az_id, gx_id, gy_id, gz_id;
+int ax_index = 0, ay_index = 0, az_index = 0; // accelerometer xyz from left index
+int gx_index = 0, gy_index = 0, gz_index = 0; // gyro xyz from left index
 
-float ax_middle = 0, ay_middle = 0, az_middle = 0; // accelerometer xyz from left midlle 
-float gx_middle = 0, gy_middle = 0, gz_middle = 0; // gyro xyz from left midlle
-bool f_middle = 0; // force sensor boolean for left middle
+float ax_m, ay_m, az_m, gx_m, gy_m, gz_m;
+int ax_middle = 0, ay_middle = 0, az_middle = 0; // accelerometer xyz from left middle
+int gx_middle = 0, gy_middle = 0, gz_middle = 0; // gyro xyz from left middle
 
-float ax_ring = 0, ay_ring = 0, az_ring = 0; // accelerometer xyz from left ring 
-float gx_ring = 0, gy_ring = 0, gz_ring = 0;  // gyro xyz from left ring
-bool f_ring = 0; // force sensor boolean for left ring
+float ax_r, ay_r, az_r, gx_r, gy_r, gz_r;
+int ax_ring = 0, ay_ring = 0, az_ring = 0; // accelerometer xyz from left ring 
+int gx_ring = 0, gy_ring = 0, gz_ring = 0;  // gyro xyz from left ring
 
-float ax_pinky = 0, ay_pinky = 0, az_pinky = 0; // accelerometer xyz from left pinky
-float gx_pinky = 0, gy_pinky = 0, gz_pinky = 0; // gyro xyz from left pinky
-bool f_pinky = 0; // force sensor boolean for left pinky
+float ax_p, ay_p, az_p, gx_p, gy_p, gz_p;
+int ax_pinky = 0, ay_pinky = 0, az_pinky = 0; // accelerometer xyz from left pinky
+int gx_pinky = 0, gy_pinky = 0, gz_pinky = 0; // gyro xyz from left pinky
 
 // Packet layout (little-endian):
 // uint32  sample_id
@@ -52,6 +79,8 @@ uint32_t sample_id = 0; // to label the packets
 void setup() {
   Serial.begin(9600);
 
+  Serial.println("After Serial");
+
   if (!IMU.begin()) {
     Serial.println("Failed to initialize IMU!");
     while (1);
@@ -61,6 +90,47 @@ void setup() {
     Serial.println("Failed to initialize BLE!");
     while (1);
   }
+
+  // Initialise SPI for finger IMUs
+  SPI.begin();
+  Serial.println("After SPI");
+
+  // Set all CS pins HIGH (deselected) before initializing
+  pinMode(CS_THUMB, OUTPUT);  digitalWrite(CS_THUMB, HIGH);
+  pinMode(CS_INDEX, OUTPUT);  digitalWrite(CS_INDEX, HIGH);
+  pinMode(CS_MIDDLE, OUTPUT); digitalWrite(CS_MIDDLE, HIGH);
+  pinMode(CS_RING, OUTPUT);   digitalWrite(CS_RING, HIGH);
+  pinMode(CS_PINKY, OUTPUT);  digitalWrite(CS_PINKY, HIGH);
+
+  Serial.println("Before Init");
+  
+  // Initialize each BMI160 one at a time (CS pin only - library auto-detects SPI)
+  BMI160_thumb.begin(CS_THUMB);
+  BMI160_thumb.setGyroRange(250);
+  BMI160_thumb.setAccelerometerRange(4);
+  Serial.print("THUMB ID: "); Serial.println(BMI160_thumb.getDeviceID(), HEX);
+
+  BMI160_index.begin(CS_INDEX);
+  BMI160_index.setGyroRange(250);
+  BMI160_index.setAccelerometerRange(4);
+  Serial.print("INDEX ID: "); Serial.println(BMI160_index.getDeviceID(), HEX);
+
+  BMI160_middle.begin(CS_MIDDLE);
+  BMI160_middle.setGyroRange(250);
+  BMI160_middle.setAccelerometerRange(4);
+  Serial.print("MIDDLE ID: "); Serial.println(BMI160_middle.getDeviceID(), HEX);
+
+  BMI160_ring.begin(CS_RING);
+  BMI160_ring.setGyroRange(250);
+  BMI160_ring.setAccelerometerRange(4);
+  Serial.print("RING ID: "); Serial.println(BMI160_ring.getDeviceID(), HEX);
+
+  BMI160_pinky.begin(CS_PINKY);
+  BMI160_pinky.setGyroRange(250);
+  BMI160_pinky.setAccelerometerRange(4);
+  Serial.print("PINKY ID: "); Serial.println(BMI160_pinky.getDeviceID(), HEX);
+
+  Serial.println("After Init");
 
   BLE.setLocalName(Name);
   BLE.setAdvertisedService(GIK_Service);
@@ -104,6 +174,69 @@ void loop() {
       if (IMU.gyroscopeAvailable()) {
         IMU.readGyroscope(gx_base, gy_base, gz_base);
       }
+
+      bool f_thumb = analogRead(FSR1_PIN) > THRESHOLD ? 1 : 0;
+      bool f_index = analogRead(FSR2_PIN) > THRESHOLD ? 1 : 0;
+      bool f_middle = analogRead(FSR3_PIN) > THRESHOLD ? 1 : 0;
+      bool f_ring = analogRead(FSR4_PIN) > THRESHOLD ? 1 : 0;
+      bool f_pinky = analogRead(FSR5_PIN) > THRESHOLD ? 1 : 0;
+
+      // Read each finger IMU - library handles CS internally after begin()
+      digitalWrite(CS_THUMB, LOW);
+      BMI160.readMotionSensor(ax_thumb, ay_thumb, az_thumb, gx_thumb, gy_thumb, gz_thumb);
+      digitalWrite(CS_THUMB, HIGH);
+
+      digitalWrite(CS_INDEX, LOW); 
+      BMI160.readMotionSensor(ax_index, ay_index, az_index, gx_index, gy_index, gz_index);
+      digitalWrite(CS_INDEX, HIGH);
+
+      digitalWrite(CS_MIDDLE, LOW);
+      BMI160.readMotionSensor(ax_middle, ay_middle, az_middle, gx_middle, gy_middle, gz_middle);
+      digitalWrite(CS_MIDDLE, HIGH);
+
+      digitalWrite(CS_RING, LOW); 
+      BMI160.readMotionSensor(ax_ring, ay_ring, az_ring, gx_ring, gy_ring, gz_ring);
+      digitalWrite(CS_RING, HIGH); 
+
+      digitalWrite(CS_PINKY, LOW);
+      BMI160.readMotionSensor(ax_pinky, ay_pinky, az_pinky, gx_pinky, gy_pinky, gz_pinky);
+      digitalWrite(CS_PINKY, HIGH);
+
+      ax_tb = convertRawAccel(ax_thumb);
+      ay_tb = convertRawAccel(ay_thumb);
+      az_tb = convertRawAccel(az_thumb);
+      gx_tb = convertRawGyro(gx_thumb);
+      gy_tb = convertRawGyro(gy_thumb);
+      gz_tb = convertRawGyro(gz_thumb);
+
+      ax_id = convertRawAccel(ax_index);
+      ay_id = convertRawAccel(ay_index);
+      az_id = convertRawAccel(az_index);
+      gx_id = convertRawGyro(gx_index);
+      gy_id = convertRawGyro(gy_index);
+      gz_id = convertRawGyro(gz_index);
+
+      ax_m = convertRawAccel(ax_middle);
+      ay_m = convertRawAccel(ay_middle);
+      az_m = convertRawAccel(az_middle);
+      gx_m = convertRawGyro(gx_middle);
+      gy_m = convertRawGyro(gy_middle);
+      gz_m = convertRawGyro(gz_middle);
+
+      ax_r = convertRawAccel(ax_ring);
+      ay_r = convertRawAccel(ay_ring);
+      az_r = convertRawAccel(az_ring);
+      gx_r = convertRawGyro(gx_ring);
+      gy_r = convertRawGyro(gy_ring);
+      gz_r = convertRawGyro(gz_ring);
+
+      ax_p = convertRawAccel(ax_pinky);
+      ay_p = convertRawAccel(ay_pinky);
+      az_p = convertRawAccel(az_pinky);
+      gx_p = convertRawGyro(gx_pinky);
+      gy_p = convertRawGyro(gy_pinky);
+      gz_p = convertRawGyro(gz_pinky);
+
       sample_id++;
 
       uint8_t buf[153];
@@ -123,68 +256,75 @@ void loop() {
       PACK_FLOAT(gz_base);
 
       // thumb
-      PACK_FLOAT(ax_thumb);
-      PACK_FLOAT(ay_thumb);
-      PACK_FLOAT(az_thumb);
-      PACK_FLOAT(gx_thumb);
-      PACK_FLOAT(gy_thumb);
-      PACK_FLOAT(gz_thumb);
+      PACK_FLOAT(ax_tb);
+      PACK_FLOAT(ay_tb);
+      PACK_FLOAT(az_tb);
+      PACK_FLOAT(gx_tb);
+      PACK_FLOAT(gy_tb);
+      PACK_FLOAT(gz_tb);
       PACK_BOOL(f_thumb);
 
       // index
-      PACK_FLOAT(ax_index);
-      PACK_FLOAT(ay_index);
-      PACK_FLOAT(az_index);
-      PACK_FLOAT(gx_index);
-      PACK_FLOAT(gy_index);
-      PACK_FLOAT(gz_index);
+      PACK_FLOAT(ax_id);
+      PACK_FLOAT(ay_id);
+      PACK_FLOAT(az_id);
+      PACK_FLOAT(gx_id);
+      PACK_FLOAT(gy_id);
+      PACK_FLOAT(gz_id);
       PACK_BOOL(f_index);
 
       // middle
-      PACK_FLOAT(ax_middle);
-      PACK_FLOAT(ay_middle);
-      PACK_FLOAT(az_middle);
-      PACK_FLOAT(gx_middle);
-      PACK_FLOAT(gy_middle);
-      PACK_FLOAT(gz_middle);
+      PACK_FLOAT(ax_m);
+      PACK_FLOAT(ay_m);
+      PACK_FLOAT(az_m);
+      PACK_FLOAT(gx_m);
+      PACK_FLOAT(gy_m);
+      PACK_FLOAT(gz_m);
       PACK_BOOL(f_middle);
 
       // ring
-      PACK_FLOAT(ax_ring);
-      PACK_FLOAT(ay_ring);
-      PACK_FLOAT(az_ring);
-      PACK_FLOAT(gx_ring);
-      PACK_FLOAT(gy_ring);
-      PACK_FLOAT(gz_ring);
+      PACK_FLOAT(ax_r);
+      PACK_FLOAT(ay_r);
+      PACK_FLOAT(az_r);
+      PACK_FLOAT(gx_r);
+      PACK_FLOAT(gy_r);
+      PACK_FLOAT(gz_r);
       PACK_BOOL(f_ring);
 
       // pinky
-      PACK_FLOAT(ax_pinky);
-      PACK_FLOAT(ay_pinky);
-      PACK_FLOAT(az_pinky);
-      PACK_FLOAT(gx_pinky);
-      PACK_FLOAT(gy_pinky);
-      PACK_FLOAT(gz_pinky);
+      PACK_FLOAT(ax_p);
+      PACK_FLOAT(ay_p);
+      PACK_FLOAT(az_p);
+      PACK_FLOAT(gx_p);
+      PACK_FLOAT(gy_p);
+      PACK_FLOAT(gz_p);
       PACK_BOOL(f_pinky);
 
-
       GIK_tx_Char.writeValue(buf, sizeof(buf));  // send out the packet
-
-      // // debug
-      // Serial.print("id=");
-      // Serial.print(sample_id);
-      // Serial.print(" acc_base=");
-      // Serial.print(ax_base); Serial.print(",");
-      // Serial.print(ay_base); Serial.print(",");
-      // Serial.print(az_base);
-      // Serial.print(" gyro_base=");
-      // Serial.print(gx_base); Serial.print(",");
-      // Serial.print(gy_base); Serial.print(",");
-      // Serial.println(gz_base);
 
       delay(10);  // ~100 Hz
     }
 
     Serial.println("Receiver disconnected");
   }
+}
+
+float convertRawGyro(int gRaw) {
+  // since we are using 250 degrees/seconds range
+  // -250 maps to a raw value of -32768
+  // +250 maps to a raw value of 32767
+
+  float g = (gRaw * 250.0) / 32768.0;
+
+  return g;
+}
+
+float convertRawAccel(int aRaw) {
+  // since we are using 250 degrees/seconds range
+  // -250 maps to a raw value of -32768
+  // +250 maps to a raw value of 32767
+
+  float a = (aRaw * (4/32768.0));
+
+  return a;
 }
