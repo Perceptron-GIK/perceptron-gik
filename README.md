@@ -1,11 +1,14 @@
 # perceptron-gik
-Glove-based Invisible Keyboard
+Glove-based Invisible Keyboard (GIK) is a pair of gloves connected with sensors to detect finger movements via the IMU sensors on each finger, while detecting key presses with a force sensor on each finger tip. The data is collected via SPI protocol and being packeted before sending out to the inference device via Bluetooth Low Energy module (BLE) from the Arduino Nano BLE Sense Rev 2.
 
-### Software Requirements (to allow Micropython on Arduino, we need special Arduino editor)
-- MicroPython Firmware Installer https://github.com/arduino/lab-micropython-installer.git - the firmware installer is needed to install MicroPython on our Arduino board.
-- Arduino Lab for Micropython https://labs.arduino.cc/en/labs/micropython - Arduino Lab for MicroPython is an editor where we can create and run MicroPython scripts on our Arduino board.
+This project is conducted at **Imperial College London**, part of the AML Laboratory and AML Devices module where students build an hardware device that utilises ML techniques to achieve goals and tasks. 
 
-### How MicroPython works on NanoBLE Sense Rev2
-- Download the MicroPython firmware onto the Nano board. Note that once this is done, you will not be able to upload .ino files onto the board anymore. 
-- The structure of the .py scripts are fixed, namely boot.py and main.py, which are the two files that will only be executed offline when the board is running in standalone condition. boot.py will run once whenever Nano is powered up for the first time/reset, thus please put the initialisation and import modules in this file.
-- main.py runs after boot.py and will be executed till the board is disconnected from power supply. Thus please put the main loop logic inside this file. 
+**Project Members: Jun, Hazel, Souparna**
+
+### Software Requirements and Setup
+
+- Arduino IDE to write and compile C code to the Arduino Nano Microcontroller
+- BMI160 IMU Sensors are used due to its small size that fits onto the fingers. Due to the availability of High-Speed SPI on Nano, we configured BMI160 to work with SPI, and we managed to make all 10 IMUs to work on a common SPI bus. Please refer to the **GIK_Nano.ino** file in the repo for the corresponding code.
+
+
+
