@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from mathlib import *
+from .mathlib import *
 
 class IMUTracker:
     def __init__(self, sr, use_mag=True):
