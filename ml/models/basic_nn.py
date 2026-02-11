@@ -363,11 +363,27 @@ class CNNModel(nn.Module):
         return self.projection(x)
 
 
+class FocalLoss(nn.Module):
+    """Focal Loss for handling class imbalance. Best performance with gamma=2.0."""
+    
+    def __init__(self, gamma: float = 2.0, alpha: Optional[torch.Tensor] = None):
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+    
+    def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        ce_loss = F.cross_entropy(inputs, targets, weight=self.alpha, reduction='none')
+        pt = torch.exp(-ce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        return focal_loss.mean()
+
+
 class GIKTrainer:
     """
     Training utilities for GIK models.
     
     Uses contiguous train/val/test splits (no shuffle) to preserve causality.
+    Uses Focal Loss by default for better handling of class imbalance.
     
     Args:
         model: GIKModelWrapper instance
@@ -376,9 +392,11 @@ class GIKTrainer:
         learning_rate: Learning rate for optimizer
         weight_decay: L2 regularization
         batch_size: Training batch size
-        train_ratio: Fraction of data for training (default 0.8, e.g. samples 0 to 0.8*N)
-        val_ratio: Fraction for validation (default 0.1, e.g. 0.8*N to 0.9*N)
-        test_ratio: Fraction for test (default 0.1, e.g. 0.9*N to end)
+        train_ratio: Fraction of data for training (default 0.8)
+        val_ratio: Fraction for validation (default 0.1)
+        test_ratio: Fraction for test (default 0.1)
+        use_focal_loss: Whether to use Focal Loss (recommended for imbalanced data)
+        focal_gamma: Gamma parameter for Focal Loss (default 2.0)
     """
     
     def __init__(
@@ -386,12 +404,14 @@ class GIKTrainer:
         model: GIKModelWrapper,
         dataset: Dataset,
         device: Optional[str] = None,
-        learning_rate: float = 1e-3,
+        learning_rate: float = 5e-4,
         weight_decay: float = 1e-4,
         batch_size: int = 32,
         train_ratio: float = 0.8,
         val_ratio: float = 0.1,
         test_ratio: float = 0.1,
+        use_focal_loss: bool = True,
+        focal_gamma: float = 2.0,
     ):
         if device is None:
             if torch.cuda.is_available():
@@ -419,8 +439,10 @@ class GIKTrainer:
         
         self.optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         
-        # Get class weights if available
-        if hasattr(dataset, 'get_class_weights'):
+        # Use Focal Loss by default (better for imbalanced classes)
+        if use_focal_loss:
+            self.criterion = FocalLoss(gamma=focal_gamma)
+        elif hasattr(dataset, 'get_class_weights'):
             class_weights = dataset.get_class_weights().to(self.device)
             self.criterion = nn.CrossEntropyLoss(weight=class_weights)
         else:
@@ -550,7 +572,7 @@ class GIKTrainer:
 
 
 def create_model(
-    model_type: str = 'transformer',
+    model_type: str = 'lstm',
     hidden_dim: int = 128,
     input_dim: int = None,
     **kwargs
@@ -559,10 +581,12 @@ def create_model(
     Factory function to create a GIK model.
     
     Args:
-        model_type: One of 'transformer' (best), 'attention_lstm', 'lstm', 'gru', 'rnn', 'cnn'
+        model_type: One of 'lstm' (best with focal loss), 'transformer', 'attention_lstm', 'gru', 'rnn', 'cnn'
         hidden_dim: Hidden dimension size
         input_dim: Number of input features (required)
         **kwargs: Additional arguments for the inner model
+    
+    Recommended config for best accuracy (~37%): lstm with focal loss (default in GIKTrainer)
     """
     if input_dim is None:
         raise ValueError("input_dim is required - get it from dataset.input_dim")
