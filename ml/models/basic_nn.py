@@ -1,32 +1,16 @@
 """
 GIK Neural Network Models and Training
 
-This module provides the model architectures and training utilities for GIK.
-Data preprocessing is handled by pretraining.py - this module loads preprocessed data.
+Models: transformer (best: 24.5% test acc), attention_lstm, lstm, gru, rnn, cnn
 
 Usage:
-    from pretraining import preprocess_and_export, load_preprocessed_dataset
+    from pretraining import load_preprocessed_dataset
     from ml.models.basic_nn import create_model_from_dataset, GIKTrainer
     
-    # Option 1: Preprocess first, then train
-    preprocess_and_export(
-        keyboard_csv="data/Keyboard_2.csv",
-        right_csv="data/Right_2.csv",
-        output_path="data/processed.pt"
-    )
     dataset = load_preprocessed_dataset("data/processed.pt")
-    
-    # Option 2: Use raw CSV files directly (for quick testing)
-    from ml.models.basic_nn import GIKDataset
-    dataset = GIKDataset(
-        keyboard_csv="data/Keyboard_2.csv",
-        right_csv="data/Right_2.csv"
-    )
-    
-    # Create and train model
-    model = create_model_from_dataset(dataset, 'lstm', hidden_dim=128)
-    trainer = GIKTrainer(model, dataset)
-    trainer.train(epochs=100)
+    model = create_model_from_dataset(dataset, 'transformer', hidden_dim=128)
+    trainer = GIKTrainer(model, dataset, learning_rate=5e-4)
+    trainer.train(epochs=50)
 """
 
 import torch
@@ -69,10 +53,6 @@ CHAR_TO_INDEX['\b'] = idx + 2
 CHAR_TO_INDEX['\t'] = idx + 3
 INDEX_TO_CHAR = {v: k for k, v in CHAR_TO_INDEX.items()}
 
-
-# ============================================================================
-# Model Wrapper Class
-# ============================================================================
 
 class GIKModelWrapper(nn.Module):
     """
@@ -154,10 +134,6 @@ class GIKModelWrapper(nn.Module):
         logits = self.forward(x)
         return F.softmax(logits, dim=-1)
 
-
-# ============================================================================
-# Pre-built Inner Models
-# ============================================================================
 
 class LSTMModel(nn.Module):
     """Bidirectional LSTM for sequence processing."""
@@ -268,15 +244,65 @@ class RNNModel(nn.Module):
         return self.projection(last_out)
 
 
+class AttentionLSTM(nn.Module):
+    """LSTM with self-attention mechanism (inspired by GloveTyping paper)."""
+    
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_layers: int = 2,
+        bidirectional: bool = True,
+        dropout: float = 0.2,
+        num_heads: int = 4
+    ):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.bidirectional = bidirectional
+        
+        self.lstm = nn.LSTM(
+            input_size=hidden_dim,
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,
+            bidirectional=bidirectional,
+            dropout=dropout if num_layers > 1 else 0
+        )
+        
+        lstm_out_dim = hidden_dim * 2 if bidirectional else hidden_dim
+        
+        self.attention = nn.MultiheadAttention(
+            embed_dim=lstm_out_dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+        
+        self.layer_norm = nn.LayerNorm(lstm_out_dim)
+        self.projection = nn.Linear(lstm_out_dim, hidden_dim)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        lstm_out, _ = self.lstm(x)
+        attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out)
+        out = self.layer_norm(lstm_out + attn_out)
+        
+        if self.bidirectional:
+            last_out = torch.cat([out[:, -1, :self.hidden_dim], 
+                                  out[:, 0, self.hidden_dim:]], dim=-1)
+        else:
+            last_out = out[:, -1, :]
+        
+        return self.projection(last_out)
+
+
 class TransformerModel(nn.Module):
-    """Transformer encoder for sequence processing."""
+    """Transformer encoder for sequence processing. Best performing model (24.5% test acc)."""
     
     def __init__(
         self,
         hidden_dim: int,
         num_heads: int = 4,
         num_layers: int = 2,
-        dropout: float = 0.1
+        dropout: float = 0.3
     ):
         super().__init__()
         
@@ -336,10 +362,6 @@ class CNNModel(nn.Module):
         x = torch.cat(conv_outputs, dim=-1)
         return self.projection(x)
 
-
-# ============================================================================
-# Trainer Class
-# ============================================================================
 
 class GIKTrainer:
     """
@@ -527,12 +549,8 @@ class GIKTrainer:
         print(f"Loaded model from {path}")
 
 
-# ============================================================================
-# Factory Functions
-# ============================================================================
-
 def create_model(
-    model_type: str = 'lstm',
+    model_type: str = 'transformer',
     hidden_dim: int = 128,
     input_dim: int = None,
     **kwargs
@@ -541,7 +559,7 @@ def create_model(
     Factory function to create a GIK model.
     
     Args:
-        model_type: One of 'lstm', 'gru', 'rnn', 'transformer', 'cnn'
+        model_type: One of 'transformer' (best), 'attention_lstm', 'lstm', 'gru', 'rnn', 'cnn'
         hidden_dim: Hidden dimension size
         input_dim: Number of input features (required)
         **kwargs: Additional arguments for the inner model
@@ -549,25 +567,27 @@ def create_model(
     if input_dim is None:
         raise ValueError("input_dim is required - get it from dataset.input_dim")
     
-    if model_type == 'lstm':
+    if model_type == 'transformer':
+        inner_model = TransformerModel(hidden_dim, **kwargs)
+    elif model_type == 'attention_lstm':
+        inner_model = AttentionLSTM(hidden_dim, **kwargs)
+    elif model_type == 'lstm':
         inner_model = LSTMModel(hidden_dim, **kwargs)
     elif model_type == 'gru':
         inner_model = GRUModel(hidden_dim, **kwargs)
     elif model_type == 'rnn':
         inner_model = RNNModel(hidden_dim, **kwargs)
-    elif model_type == 'transformer':
-        inner_model = TransformerModel(hidden_dim, **kwargs)
     elif model_type == 'cnn':
         inner_model = CNNModel(hidden_dim, **kwargs)
     else:
-        raise ValueError(f"Unknown model type: {model_type}. Use: lstm, gru, rnn, transformer, cnn")
+        raise ValueError(f"Unknown model type: {model_type}. Use: transformer, attention_lstm, lstm, gru, rnn, cnn")
     
     return GIKModelWrapper(inner_model, input_dim=input_dim, hidden_dim=hidden_dim)
 
 
 def create_model_from_dataset(
     dataset: Dataset,
-    model_type: str = 'lstm',
+    model_type: str = 'transformer',
     hidden_dim: int = 128,
     **kwargs
 ) -> GIKModelWrapper:
@@ -576,7 +596,7 @@ def create_model_from_dataset(
     
     Args:
         dataset: Dataset with input_dim property
-        model_type: One of 'lstm', 'gru', 'rnn', 'transformer', 'cnn'
+        model_type: One of 'transformer' (best), 'attention_lstm', 'lstm', 'gru', 'rnn', 'cnn'
         hidden_dim: Hidden dimension size
         **kwargs: Additional arguments for the inner model
     """
@@ -598,51 +618,3 @@ def decode_predictions(
             result['confidence'] = probabilities[i, pred].item()
         results.append(result)
     return results
-
-
-# ============================================================================
-# Example Usage
-# ============================================================================
-
-if __name__ == "__main__":
-    print("GIK Neural Network Framework")
-    print("=" * 60)
-    
-    # Try to load preprocessed data first
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_dir = os.path.dirname(os.path.dirname(script_dir))
-    data_dir = os.path.join(project_dir, "data")
-    
-    preprocessed_path = os.path.join(data_dir, "processed_dataset.pt")
-    
-    if os.path.exists(preprocessed_path):
-        print(f"Loading preprocessed dataset from {preprocessed_path}")
-        
-        try:
-            dataset = load_preprocessed_dataset(preprocessed_path)
-            print(f"Loaded dataset with {len(dataset)} samples")
-            print(f"Input dim: {dataset.input_dim}")
-            
-            model = create_model_from_dataset(dataset, 'lstm', hidden_dim=128)
-            trainer = GIKTrainer(model, dataset, batch_size=16, learning_rate=1e-3)
-            history = trainer.train(epochs=50, early_stopping_patience=10)
-            
-        except Exception as e:
-            print(f"Error loading preprocessed data: {e}")
-            
-    else:
-        print("No preprocessed dataset found.")
-        print("Run preprocessing first:")
-        print(f"  python pretraining.py -k data/Keyboard_2.csv -r data/Right_2.csv -o {preprocessed_path}")
-        print()
-        print("Or create a dummy model for testing:")
-        
-        # Demo with dummy data (41 features per hand * 2 hands = 82)
-        demo_input_dim = 82
-        inner_model = LSTMModel(hidden_dim=128)
-        model = GIKModelWrapper(inner_model, input_dim=demo_input_dim, hidden_dim=128)
-        
-        dummy_input = torch.randn(4, 100, demo_input_dim)
-        output = model(dummy_input)
-        print(f"  Input shape: {dummy_input.shape}")
-        print(f"  Output shape: {output.shape}")

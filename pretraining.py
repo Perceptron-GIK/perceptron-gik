@@ -35,11 +35,7 @@ from src.imu.v1.main import IMUTracker
 from src.pre_processing.alignment import Preprocessing, INDEX_TO_CHAR, NUM_CLASSES
 
 
-# ============================================================================
-# IMU Filtering
-# ============================================================================
-
-IMU_SAMPLING_RATE = 100.0  # Hz
+IMU_SAMPLING_RATE = 100.0
 IMU_PARTS = ['base', 'thumb', 'index', 'middle', 'ring', 'pinky']
 
 
@@ -82,10 +78,6 @@ def filter_imu_data(df: pd.DataFrame) -> pd.DataFrame:
     
     return df
 
-
-# ============================================================================
-# Dataset Export/Import
-# ============================================================================
 
 def preprocess_and_export(
     data_dir: str,
@@ -352,10 +344,6 @@ def export_dataset_to_csv(
     return summary_path
 
 
-# ============================================================================
-# PyTorch Dataset for Preprocessed Data
-# ============================================================================
-
 class PreprocessedGIKDataset(Dataset):
     """
     PyTorch Dataset that loads preprocessed data from disk.
@@ -423,37 +411,4 @@ class PreprocessedGIKDataset(Dataset):
         return sample, label
     
     def get_class_weights(self) -> torch.Tensor:
-        """Get class weights for imbalanced data."""
         return self.class_weights
-
-
-# ============================================================================
-# CLI Interface
-# ============================================================================
-
-if __name__ == "__main__":
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="GIK Data Preprocessing")
-    parser.add_argument("--keyboard", "-k", required=True, help="Path to keyboard CSV")
-    parser.add_argument("--right", "-r", help="Path to right hand IMU CSV")
-    parser.add_argument("--left", "-l", help="Path to left hand IMU CSV")
-    parser.add_argument("--output", "-o", default="data/processed_dataset.pt", help="Output path")
-    parser.add_argument("--max-seq-length", type=int, default=100, help="Max sequence length")
-    parser.add_argument("--no-normalize", action="store_true", help="Disable normalization")
-    parser.add_argument("--no-filter", action="store_true", help="Disable IMU filtering")
-    
-    args = parser.parse_args()
-    
-    if args.right is None and args.left is None:
-        parser.error("At least one of --right or --left must be provided")
-    
-    preprocess_and_export(
-        keyboard_csv=args.keyboard,
-        right_csv=args.right,
-        left_csv=args.left,
-        output_path=args.output,
-        max_seq_length=args.max_seq_length,
-        normalize=not args.no_normalize,
-        apply_filtering=not args.no_filter
-    )
