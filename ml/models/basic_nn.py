@@ -433,7 +433,7 @@ class GIKTrainer:
         self.val_dataset = Subset(dataset, range(t, v))
         self.test_dataset = Subset(dataset, range(v, n))
         
-        self.train_loader = DataLoader(self.train_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+        self.train_loader = DataLoader(self.train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
         self.val_loader = DataLoader(self.val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
         self.test_loader = DataLoader(self.test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
         
