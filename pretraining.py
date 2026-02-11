@@ -79,6 +79,186 @@ def filter_imu_data(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def preprocess_multiple_sources(
+    data_dir: str,
+    output_path: str,
+    keyboard_files: List[str],
+    left_files: Optional[List[str]] = None,
+    right_files: Optional[List[str]] = None,
+    max_seq_length: int = 100,
+    normalize: bool = True,
+    apply_filtering: bool = True
+) -> Dict[str, Any]:
+    """
+    Preprocess data from multiple source files and combine them.
+    
+    Args:
+        data_dir: Directory containing data files
+        output_path: Path to save processed dataset (.pt file)
+        keyboard_files: List of keyboard events CSV filenames
+        left_files: List of left hand IMU CSV filenames (optional)
+        right_files: List of right hand IMU CSV filenames (optional)
+        max_seq_length: Maximum sequence length
+        normalize: Whether to normalize features
+        apply_filtering: Whether to apply IMU filtering
+        
+    Returns:
+        Metadata dictionary
+    """
+    if len(keyboard_files) == 0:
+        raise ValueError("At least one keyboard file must be provided")
+    
+    if left_files is None:
+        left_files = []
+    if right_files is None:
+        right_files = []
+    
+    # Ensure file lists match in length (or one is empty)
+    has_left = len(left_files) > 0
+    has_right = len(right_files) > 0
+    
+    if has_left and len(left_files) != len(keyboard_files):
+        raise ValueError(f"Number of left files ({len(left_files)}) must match keyboard files ({len(keyboard_files)})")
+    if has_right and len(right_files) != len(keyboard_files):
+        raise ValueError(f"Number of right files ({len(right_files)}) must match keyboard files ({len(keyboard_files)})")
+    
+    print(f"Loading data from {data_dir}...")
+    print(f"  Keyboard files: {keyboard_files}")
+    if has_left:
+        print(f"  Left IMU files: {left_files}")
+    if has_right:
+        print(f"  Right IMU files: {right_files}")
+    
+    all_samples = []
+    all_labels = []
+    all_prev_labels = []
+    total_skipped = {}
+    
+    # Process each file pair
+    for i in range(len(keyboard_files)):
+        keyboard_file = keyboard_files[i]
+        left_file = left_files[i] if has_left else None
+        right_file = right_files[i] if has_right else None
+        
+        print(f"\nProcessing source {i+1}/{len(keyboard_files)}: {keyboard_file}")
+        
+        preprocessor = Preprocessing(
+            data_dir=data_dir,
+            keyboard_file=keyboard_file,
+            right_file=right_file,
+            left_file=left_file
+        )
+        
+        samples, labels, prev_labels, metadata = preprocessor.align(
+            max_seq_length=max_seq_length,
+            filter_func=filter_imu_data if apply_filtering else None
+        )
+        
+        all_samples.extend(samples)
+        all_labels.extend(labels)
+        all_prev_labels.extend(prev_labels)
+        
+        # Accumulate skipped chars
+        for char, count in metadata.get('skipped_chars', {}).items():
+            total_skipped[char] = total_skipped.get(char, 0) + count
+        
+        print(f"  Added {len(samples)} samples (total: {len(all_samples)})")
+    
+    if total_skipped:
+        print(f"\nTotal skipped characters: {total_skipped}")
+    
+    print(f"\nProcessing {len(all_samples)} total samples...")
+    
+    # Convert to tensors
+    samples_tensor = [torch.tensor(s, dtype=torch.float32) for s in all_samples]
+    labels_index = torch.tensor(all_labels, dtype=torch.long)
+    prev_labels_index = torch.tensor(all_prev_labels, dtype=torch.long)
+    labels_onehot = F.one_hot(labels_index, num_classes=NUM_CLASSES).float()
+    prev_labels_onehot = torch.zeros(len(all_prev_labels), NUM_CLASSES, dtype=torch.float32)
+    valid_prev = prev_labels_index >= 0
+    prev_labels_onehot[valid_prev] = F.one_hot(prev_labels_index[valid_prev], num_classes=NUM_CLASSES).float()
+    
+    # Compute normalization stats
+    mean = None
+    std = None
+    if normalize:
+        all_data = torch.cat([s for s in samples_tensor], dim=0)
+        all_data = torch.nan_to_num(all_data, nan=0.0, posinf=0.0, neginf=0.0)
+        mean = all_data.mean(dim=0)
+        std = all_data.std(dim=0)
+        std[std == 0] = 1.0
+        samples_tensor = [torch.nan_to_num(s, nan=0.0, posinf=0.0, neginf=0.0) for s in samples_tensor]
+    
+    # Pad sequences to uniform length
+    padded_samples = []
+    for sample in samples_tensor:
+        seq_len = sample.shape[0]
+        if seq_len >= max_seq_length:
+            padded = sample[:max_seq_length]
+        else:
+            padding = torch.zeros(max_seq_length - seq_len, sample.shape[1])
+            padded = torch.cat([sample, padding], dim=0)
+        padded_samples.append(padded)
+    
+    if len(padded_samples) > 0:
+        samples_stacked = torch.stack(padded_samples)
+    else:
+        samples_stacked = torch.tensor([])
+    
+    # Compute class weights
+    class_counts = torch.zeros(NUM_CLASSES)
+    for label in all_labels:
+        class_counts[label] += 1
+    class_weights = 1.0 / (class_counts + 1e-6)
+    class_weights = class_weights / class_weights.sum() * NUM_CLASSES
+    
+    # Build combined metadata
+    combined_metadata = {
+        'num_samples': len(all_samples),
+        'num_hands': metadata['num_hands'],
+        'has_right': metadata['has_right'],
+        'has_left': metadata['has_left'],
+        'input_dim': metadata['input_dim'],
+        'feat_dim': metadata['feat_dim'],
+        'features_per_hand': metadata['features_per_hand'],
+        'max_seq_length': max_seq_length,
+        'num_classes': NUM_CLASSES,
+        'skipped_chars': total_skipped,
+        'num_sources': len(keyboard_files),
+        'keyboard_files': keyboard_files,
+        'left_files': left_files if has_left else [],
+        'right_files': right_files if has_right else [],
+        'filter_applied': apply_filtering,
+    }
+    
+    # Save to disk
+    save_dict = {
+        'samples': samples_stacked,
+        'labels': labels_onehot,
+        'prev_labels': prev_labels_onehot,
+        'mean': mean,
+        'std': std,
+        'class_weights': class_weights,
+        'metadata': combined_metadata,
+        'normalize': normalize,
+        'max_seq_length': max_seq_length,
+    }
+    
+    torch.save(save_dict, output_path)
+    
+    json_path = output_path.replace('.pt', '_metadata.json')
+    with open(json_path, 'w') as f:
+        json.dump(combined_metadata, f, indent=2)
+    
+    print(f"\nSaved preprocessed dataset to {output_path}")
+    print(f"Saved metadata to {json_path}")
+    print(f"  - Total samples: {combined_metadata['num_samples']}")
+    print(f"  - Input dim: {combined_metadata['input_dim']}")
+    print(f"  - Sources combined: {combined_metadata['num_sources']}")
+    
+    return combined_metadata
+
+
 def preprocess_and_export(
     data_dir: str,
     output_path: str,

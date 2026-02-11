@@ -102,7 +102,12 @@ class Preprocessing:
         ], axis=1)
 
     @staticmethod
-    def _char_from_key(name: str) -> str:
+    def _char_from_key(name) -> Optional[str]:
+        # Handle NaN or non-string values
+        if name is None or (isinstance(name, float) and pd.isna(name)):
+            return None
+        if not isinstance(name, str):
+            name = str(name)
         k = name.lower()
         return SPECIAL_KEY_MAP[k] if k in SPECIAL_KEY_MAP else k
 
@@ -169,15 +174,22 @@ class Preprocessing:
         for i in range(len(key_events) - 1):
             cur_t, next_t = key_events.iloc[i]['time'], key_events.iloc[i + 1]['time']
             next_char = self._char_from_key(key_events.iloc[i + 1]['name'])
+            # Skip if next_char is None (NaN in data)
+            if next_char is None:
+                skipped_chars['<nan>'] = skipped_chars.get('<nan>', 0) + 1
+                continue
             label = self._char_to_label(next_char)
             if label is None:
                 skipped_chars[next_char] = skipped_chars.get(next_char, 0) + 1
                 continue
 
             prev_char = self._char_from_key(key_events.iloc[i]['name'])
-            prev_label = self._char_to_label(prev_char) if i > 0 else -1
-            if i > 0 and prev_label is None:
-                prev_label = -1
+            # Handle None prev_char (NaN in data)
+            prev_label = -1
+            if i > 0 and prev_char is not None:
+                prev_label = self._char_to_label(prev_char)
+                if prev_label is None:
+                    prev_label = -1
 
             right_win = None
             if self.has_right:
