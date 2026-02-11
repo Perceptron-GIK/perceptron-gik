@@ -144,70 +144,79 @@ class Preprocessing:
         self,
         max_seq_length: int = 100,
         filter_func: Optional[callable] = None,
-    ) -> Tuple[List[np.ndarray], List[int], Dict[str, Any]]:
-        
-        samples, labels, right_cols, left_cols = [], [], [], []
+    ) -> Tuple[List[np.ndarray], List[int], List[int], Dict[str, Any]]:
+        """Returns (samples, labels, prev_labels, metadata). prev_labels[i] is the previous key's label (-1 for first sample)."""
+        samples, labels, prev_labels = [], [], []
         key_events = (
             self.keyboard.df[self.keyboard.df['event_type'] == 'down']
             .sort_values('time')
             .reset_index(drop=True)
         )
-        # Sort the data 
+
+        right_cols, left_cols = [], []
         if self.has_right:
-            self.right.sorted_df = self.right.df.sort_values('time_stamp').reset_index(drop=True)
-            self.right.df = filter_func(self.right.df)
+            self.right.df = self.right.df.sort_values('time_stamp').reset_index(drop=True)
+            if filter_func is not None:
+                self.right.df = filter_func(self.right.df)
             right_cols = self.right.feature_columns
         if self.has_left:
-            self.left.sorted_df = self.left.df.sort_values('time_stamp').reset_index(drop=True)
-            self.left.df = filter_func(self.left.df)
+            self.left.df = self.left.df.sort_values('time_stamp').reset_index(drop=True)
+            if filter_func is not None:
+                self.left.df = filter_func(self.left.df)
             left_cols = self.left.feature_columns
-        
 
         skipped_chars = {}
         for i in range(len(key_events) - 1):
             cur_t, next_t = key_events.iloc[i]['time'], key_events.iloc[i + 1]['time']
-            char = self._char_from_key(key_events.iloc[i + 1]['name'])
-            label = self._char_to_label(char) # convert to a number based on fixed mapping
+            next_char = self._char_from_key(key_events.iloc[i + 1]['name'])
+            label = self._char_to_label(next_char)
             if label is None:
-                skipped_chars[char] = skipped_chars.get(char, 0) + 1
+                skipped_chars[next_char] = skipped_chars.get(next_char, 0) + 1
                 continue
+
+            prev_char = self._char_from_key(key_events.iloc[i]['name'])
+            prev_label = self._char_to_label(prev_char) if i > 0 else -1
+            if i > 0 and prev_label is None:
+                prev_label = -1
 
             right_win = None
             if self.has_right:
-                mask = (self.right['time_stamp'] >= cur_t) & (self.right['time_stamp'] < next_t)
-                arr = self.right.loc[mask, right_cols].values
-                if len(arr) == 0:
-                    continue
-                right_win = arr
+                mask = (self.right.df['time_stamp'] >= cur_t) & (self.right.df['time_stamp'] < next_t)
+                arr = self.right.df.loc[mask, right_cols].values
+                if len(arr) > 0:
+                    right_win = arr
             left_win = None
             if self.has_left:
-                mask = (self.left['time_stamp'] >= cur_t) & (self.left['time_stamp'] < next_t)
-                arr = self.left.loc[mask, left_cols].values
-                if len(arr) == 0:
-                    continue
-                left_win = arr
+                mask = (self.left.df['time_stamp'] >= cur_t) & (self.left.df['time_stamp'] < next_t)
+                arr = self.left.df.loc[mask, left_cols].values
+                if len(arr) > 0:
+                    left_win = arr
 
             combined = self._combine_hands(right_win, left_win, max_seq_length)
             if combined is not None:
                 samples.append(combined)
                 labels.append(label)
+                prev_labels.append(prev_label if prev_label is not None else -1)
 
         if skipped_chars:
             print(f"Skipped characters not in vocabulary: {skipped_chars}")
 
-        n_right = len(right_cols) if right_cols else 0
-        n_left = len(left_cols) if left_cols else 0
+        n_right, n_left = len(right_cols), len(left_cols)
+        feat_dim = n_right + n_left
+        num_hands = (1 if self.has_right else 0) + (1 if self.has_left else 0)
         metadata = {
             'num_samples': len(samples),
+            'num_hands': num_hands,
             'has_right': self.has_right,
             'has_left': self.has_left,
-            'input_dim': n_right + n_left,
+            'input_dim': feat_dim + NUM_CLASSES,
+            'feat_dim': feat_dim,
             'features_per_hand': n_right or n_left,
             'max_seq_length': max_seq_length,
             'num_classes': NUM_CLASSES,
             'skipped_chars': skipped_chars,
         }
-        return samples, labels, metadata
+        return samples, labels, prev_labels, metadata
 
     def get_class_distribution(self, labels: List[int]) -> Dict[str, int]:
         dist = {}

@@ -32,7 +32,7 @@ Usage:
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader, random_split, Subset
 from torch import optim
 import numpy as np
 from typing import Optional, Tuple, List, Dict, Any
@@ -46,31 +46,28 @@ try:
     from pretraining import (
         PreprocessedGIKDataset,
         load_preprocessed_dataset,
-        NUM_CLASSES,
-        FEATURES_PER_HAND,
-        TOTAL_FEATURES,
-        INDEX_TO_CHAR,
-        CHAR_TO_INDEX,
     )
 except ImportError:
-    # Fallback constants if pretraining not available
-    NUM_CLASSES = 40
-    FEATURES_PER_HAND = 41
-    TOTAL_FEATURES = FEATURES_PER_HAND * 2
-    
-    CHAR_TO_INDEX = {}
-    idx = 0
-    for c in 'abcdefghijklmnopqrstuvwxyz':
-        CHAR_TO_INDEX[c] = idx
-        idx += 1
-    for c in '0123456789':
-        CHAR_TO_INDEX[c] = idx
-        idx += 1
-    CHAR_TO_INDEX[' '] = idx
-    CHAR_TO_INDEX['\n'] = idx + 1
-    CHAR_TO_INDEX['\b'] = idx + 2
-    CHAR_TO_INDEX['\t'] = idx + 3
-    INDEX_TO_CHAR = {v: k for k, v in CHAR_TO_INDEX.items()}
+    PreprocessedGIKDataset = None
+    load_preprocessed_dataset = None
+
+# Fixed constants
+NUM_CLASSES = 40
+
+# Character mappings
+CHAR_TO_INDEX = {}
+idx = 0
+for c in 'abcdefghijklmnopqrstuvwxyz':
+    CHAR_TO_INDEX[c] = idx
+    idx += 1
+for c in '0123456789':
+    CHAR_TO_INDEX[c] = idx
+    idx += 1
+CHAR_TO_INDEX[' '] = idx
+CHAR_TO_INDEX['\n'] = idx + 1
+CHAR_TO_INDEX['\b'] = idx + 2
+CHAR_TO_INDEX['\t'] = idx + 3
+INDEX_TO_CHAR = {v: k for k, v in CHAR_TO_INDEX.items()}
 
 
 # ============================================================================
@@ -92,7 +89,7 @@ class GIKModelWrapper(nn.Module):
     
     Args:
         inner_model: The core neural network (LSTM, Transformer, CNN, etc.)
-        input_dim: Number of input features (default: 82 for both hands)
+        input_dim: Number of input features (required - get from dataset.input_dim)
         hidden_dim: Hidden dimension size for the inner model
         num_classes: Number of output classes (default: 40)
         dropout: Dropout probability for classification head
@@ -102,7 +99,7 @@ class GIKModelWrapper(nn.Module):
     def __init__(
         self,
         inner_model: nn.Module,
-        input_dim: int = TOTAL_FEATURES,
+        input_dim: int,
         hidden_dim: int = 128,
         num_classes: int = NUM_CLASSES,
         dropout: float = 0.3,
@@ -200,6 +197,77 @@ class LSTMModel(nn.Module):
         return self.projection(last_out)
 
 
+class GRUModel(nn.Module):
+    """Bidirectional GRU for sequence processing."""
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_layers: int = 2,
+        bidirectional: bool = True,
+        dropout: float = 0.2
+    ):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.bidirectional = bidirectional
+
+        self.gru = nn.GRU(
+            input_size=hidden_dim,
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,
+            bidirectional=bidirectional,
+            dropout=dropout if num_layers > 1 else 0
+        )
+
+        out_dim = hidden_dim * 2 if bidirectional else hidden_dim
+        self.projection = nn.Linear(out_dim, hidden_dim) if bidirectional else nn.Identity()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out, h_n = self.gru(x)
+        if self.bidirectional:
+            last_out = torch.cat([out[:, -1, :self.hidden_dim], out[:, 0, self.hidden_dim:]], dim=-1)
+        else:
+            last_out = out[:, -1, :]
+        return self.projection(last_out)
+
+
+class RNNModel(nn.Module):
+    """Bidirectional Elman RNN for sequence processing."""
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_layers: int = 2,
+        bidirectional: bool = True,
+        dropout: float = 0.2
+    ):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.bidirectional = bidirectional
+
+        self.rnn = nn.RNN(
+            input_size=hidden_dim,
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,
+            bidirectional=bidirectional,
+            dropout=dropout if num_layers > 1 else 0,
+            nonlinearity='tanh'
+        )
+
+        out_dim = hidden_dim * 2 if bidirectional else hidden_dim
+        self.projection = nn.Linear(out_dim, hidden_dim) if bidirectional else nn.Identity()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out, h_n = self.rnn(x)
+        if self.bidirectional:
+            last_out = torch.cat([out[:, -1, :self.hidden_dim], out[:, 0, self.hidden_dim:]], dim=-1)
+        else:
+            last_out = out[:, -1, :]
+        return self.projection(last_out)
+
+
 class TransformerModel(nn.Module):
     """Transformer encoder for sequence processing."""
     
@@ -277,6 +345,8 @@ class GIKTrainer:
     """
     Training utilities for GIK models.
     
+    Uses contiguous train/val/test splits (no shuffle) to preserve causality.
+    
     Args:
         model: GIKModelWrapper instance
         dataset: Dataset instance (PreprocessedGIKDataset or compatible)
@@ -284,7 +354,9 @@ class GIKTrainer:
         learning_rate: Learning rate for optimizer
         weight_decay: L2 regularization
         batch_size: Training batch size
-        val_split: Fraction of data for validation
+        train_ratio: Fraction of data for training (default 0.8, e.g. samples 0 to 0.8*N)
+        val_ratio: Fraction for validation (default 0.1, e.g. 0.8*N to 0.9*N)
+        test_ratio: Fraction for test (default 0.1, e.g. 0.9*N to end)
     """
     
     def __init__(
@@ -295,7 +367,9 @@ class GIKTrainer:
         learning_rate: float = 1e-3,
         weight_decay: float = 1e-4,
         batch_size: int = 32,
-        val_split: float = 0.2
+        train_ratio: float = 0.8,
+        val_ratio: float = 0.1,
+        test_ratio: float = 0.1,
     ):
         if device is None:
             if torch.cuda.is_available():
@@ -309,13 +383,17 @@ class GIKTrainer:
         self.model = model.to(self.device)
         self.batch_size = batch_size
         
-        # Split dataset
-        val_size = int(len(dataset) * val_split)
-        train_size = len(dataset) - val_size
-        self.train_dataset, self.val_dataset = random_split(dataset, [train_size, val_size])
+        # Contiguous splits (causality-preserving, no shuffle)
+        n = len(dataset)
+        t = max(0, int(n * train_ratio))
+        v = max(t, t + int(n * val_ratio))
+        self.train_dataset = Subset(dataset, range(0, t))
+        self.val_dataset = Subset(dataset, range(t, v))
+        self.test_dataset = Subset(dataset, range(v, n))
         
-        self.train_loader = DataLoader(self.train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+        self.train_loader = DataLoader(self.train_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
         self.val_loader = DataLoader(self.val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+        self.test_loader = DataLoader(self.test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
         
         self.optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         
@@ -378,6 +456,24 @@ class GIKTrainer:
         
         return total_loss / total, correct / total
     
+    @torch.no_grad()
+    def evaluate_test(self) -> Tuple[float, float]:
+        """Evaluate on the held-out test set (causal split)."""
+        self.model.eval()
+        total_loss, correct, total = 0.0, 0, 0
+        for batch_x, batch_y in self.test_loader:
+            batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
+            logits = self.model(batch_x)
+            loss = self.criterion(logits, batch_y.argmax(dim=-1))
+            total_loss += loss.item() * batch_x.size(0)
+            correct += (logits.argmax(dim=-1) == batch_y.argmax(dim=-1)).sum().item()
+            total += batch_x.size(0)
+        return (total_loss / total, correct / total) if total else (0.0, 0.0)
+    
+    def evaluate(self) -> Tuple[float, float]:
+        """Alias for validate()."""
+        return self.validate()
+    
     def train(
         self, 
         epochs: int = 100,
@@ -390,7 +486,7 @@ class GIKTrainer:
         patience_counter = 0
         
         print(f"Training on {self.device}")
-        print(f"Train samples: {len(self.train_dataset)}, Val samples: {len(self.val_dataset)}")
+        print(f"Train: {len(self.train_dataset)}, Val: {len(self.val_dataset)}, Test: {len(self.test_dataset)} (causal split, no shuffle)")
         print("-" * 60)
         
         for epoch in range(epochs):
@@ -438,31 +534,33 @@ class GIKTrainer:
 def create_model(
     model_type: str = 'lstm',
     hidden_dim: int = 128,
-    input_dim: Optional[int] = None,
-    num_hands: int = 2,
+    input_dim: int = None,
     **kwargs
 ) -> GIKModelWrapper:
     """
     Factory function to create a GIK model.
     
     Args:
-        model_type: One of 'lstm', 'transformer', 'cnn'
+        model_type: One of 'lstm', 'gru', 'rnn', 'transformer', 'cnn'
         hidden_dim: Hidden dimension size
-        input_dim: Number of input features. If None, calculated from num_hands
-        num_hands: Number of hands (1 or 2)
+        input_dim: Number of input features (required)
         **kwargs: Additional arguments for the inner model
     """
     if input_dim is None:
-        input_dim = FEATURES_PER_HAND * num_hands
+        raise ValueError("input_dim is required - get it from dataset.input_dim")
     
     if model_type == 'lstm':
         inner_model = LSTMModel(hidden_dim, **kwargs)
+    elif model_type == 'gru':
+        inner_model = GRUModel(hidden_dim, **kwargs)
+    elif model_type == 'rnn':
+        inner_model = RNNModel(hidden_dim, **kwargs)
     elif model_type == 'transformer':
         inner_model = TransformerModel(hidden_dim, **kwargs)
     elif model_type == 'cnn':
         inner_model = CNNModel(hidden_dim, **kwargs)
     else:
-        raise ValueError(f"Unknown model type: {model_type}")
+        raise ValueError(f"Unknown model type: {model_type}. Use: lstm, gru, rnn, transformer, cnn")
     
     return GIKModelWrapper(inner_model, input_dim=input_dim, hidden_dim=hidden_dim)
 
@@ -478,11 +576,13 @@ def create_model_from_dataset(
     
     Args:
         dataset: Dataset with input_dim property
-        model_type: One of 'lstm', 'transformer', 'cnn'
+        model_type: One of 'lstm', 'gru', 'rnn', 'transformer', 'cnn'
         hidden_dim: Hidden dimension size
         **kwargs: Additional arguments for the inner model
     """
-    input_dim = getattr(dataset, 'input_dim', TOTAL_FEATURES)
+    input_dim = getattr(dataset, 'input_dim', None)
+    if input_dim is None:
+        raise ValueError("Dataset must have input_dim property")
     return create_model(model_type=model_type, hidden_dim=hidden_dim, input_dim=input_dim, **kwargs)
 
 
@@ -537,11 +637,12 @@ if __name__ == "__main__":
         print()
         print("Or create a dummy model for testing:")
         
-        # Demo with dummy data
+        # Demo with dummy data (41 features per hand * 2 hands = 82)
+        demo_input_dim = 82
         inner_model = LSTMModel(hidden_dim=128)
-        model = GIKModelWrapper(inner_model, input_dim=FEATURES_PER_HAND, hidden_dim=128)
+        model = GIKModelWrapper(inner_model, input_dim=demo_input_dim, hidden_dim=128)
         
-        dummy_input = torch.randn(4, 100, FEATURES_PER_HAND)
+        dummy_input = torch.randn(4, 100, demo_input_dim)
         output = model(dummy_input)
         print(f"  Input shape: {dummy_input.shape}")
         print(f"  Output shape: {output.shape}")
