@@ -44,11 +44,6 @@ def _load_receiver_module():
         source = f.read()
     # Remove the final asyncio.run(main()) call so we can import cleanly
     source = source.replace("asyncio.run(main())", "# asyncio.run(main())")
-    # Also patch the import line
-    source = source.replace(
-        "from src.keyboard.keyboard_ext import start_keyboard, stop_event",
-        "from src.keyboard.keyboard_ext import start_keyboard, stop_event",
-    )
     mod = types.ModuleType("receiver")
     mod.__file__ = receiver_path
     exec(compile(source, receiver_path, "exec"), mod.__dict__)
