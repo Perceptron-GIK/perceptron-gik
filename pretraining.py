@@ -416,6 +416,8 @@ def export_dataset_to_csv(
     import pandas as pd
     
     # Load dataset
+    # Security Note: Using weights_only=False is required for loading full dataset objects
+    # Only load .pt files from trusted sources. See SECURITY.md for details.
     data = torch.load(pt_path, weights_only=False)
     samples = data['samples']
     labels = data['labels']
@@ -536,6 +538,8 @@ class PreprocessedGIKDataset(Dataset):
         Args:
             path: Path to preprocessed .pt file
         """
+        # Security Note: Using weights_only=False is required for loading full dataset objects
+        # Only load .pt files from trusted sources. See SECURITY.md for details.
         data = torch.load(path, weights_only=False)
         
         self.samples = data['samples']

@@ -567,6 +567,8 @@ class GIKTrainer:
     
     def load_best_model(self, path: str = 'best_model.pt'):
         """Load the best saved model."""
+        # Security Note: Loading model weights only (state_dict) is safer than full model objects
+        # Ensure path points to trusted model files. See SECURITY.md for details.
         self.model.load_state_dict(torch.load(path, map_location=self.device))
         print(f"Loaded model from {path}")
 
