@@ -1,3 +1,7 @@
 src/imu/v1/__pycache__/
 src/keyboard/__pycache__/
 old/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
