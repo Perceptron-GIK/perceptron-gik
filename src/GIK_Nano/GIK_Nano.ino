@@ -176,17 +176,17 @@ void loop() {
         IMU.readGyroscope(gx_base, gy_base, gz_base);
       }
 
-      bool f_thumb = analogRead(FSR1_PIN) > THRESHOLDHIGH ? 1 : 0;
+      bool f_thumb = analogRead(FSR1_PIN) > THRESHOLDLOW ? 1 : 0;
       bool f_index = analogRead(FSR2_PIN) > THRESHOLDLOW ? 1 : 0;
-      bool f_middle = analogRead(FSR3_PIN) > THRESHOLDHIGH ? 1 : 0;
+      bool f_middle = analogRead(FSR3_PIN) > THRESHOLDLOW ? 1 : 0;
       bool f_ring = analogRead(FSR4_PIN) > THRESHOLDLOW ? 1 : 0;
-      bool f_pinky = analogRead(FSR5_PIN) > THRESHOLDHIGH ? 1 : 0;
+      bool f_pinky = analogRead(FSR5_PIN) > THRESHOLDLOW ? 1 : 0;
 
-      // Serial.print("thumb=");  Serial.print(analogRead(FSR1_PIN));
-      // Serial.print(" index="); Serial.print(analogRead(FSR2_PIN));
-      // Serial.print(" middle=");Serial.print(analogRead(FSR3_PIN));
-      // Serial.print(" ring=");  Serial.print(analogRead(FSR4_PIN));
-      // Serial.print(" pinky="); Serial.println(analogRead(FSR5_PIN));
+      Serial.print("thumb=");  Serial.print(analogRead(FSR1_PIN));
+      Serial.print(" index="); Serial.print(analogRead(FSR2_PIN));
+      Serial.print(" middle=");Serial.print(analogRead(FSR3_PIN));
+      Serial.print(" ring=");  Serial.print(analogRead(FSR4_PIN));
+      Serial.print(" pinky="); Serial.println(analogRead(FSR5_PIN));
 
       // Read each finger IMU - library handles CS internally after begin()
       digitalWrite(CS_THUMB, LOW);
