@@ -29,27 +29,28 @@ from ml.models.basic_nn import (
     NUM_CLASSES
 )
 
+# Test constants
+TEST_BATCH_SIZE = 8
+TEST_SEQ_LEN = 10
+TEST_INPUT_DIM = 30
+TEST_HIDDEN_DIM = 16
+
 
 @pytest.fixture
 def sample_data():
     """Create sample data for testing."""
-    batch_size = 8
-    seq_len = 10
-    input_dim = 30
-    hidden_dim = 16
-    
-    x = torch.randn(batch_size, seq_len, input_dim)
-    y = torch.randint(0, NUM_CLASSES, (batch_size,))
+    x = torch.randn(TEST_BATCH_SIZE, TEST_SEQ_LEN, TEST_INPUT_DIM)
+    y = torch.randint(0, NUM_CLASSES, (TEST_BATCH_SIZE,))
     y_onehot = torch.nn.functional.one_hot(y, num_classes=NUM_CLASSES).float()
     
     return {
         'x': x,
         'y': y,
         'y_onehot': y_onehot,
-        'batch_size': batch_size,
-        'seq_len': seq_len,
-        'input_dim': input_dim,
-        'hidden_dim': hidden_dim
+        'batch_size': TEST_BATCH_SIZE,
+        'seq_len': TEST_SEQ_LEN,
+        'input_dim': TEST_INPUT_DIM,
+        'hidden_dim': TEST_HIDDEN_DIM
     }
 
 

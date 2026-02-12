@@ -25,6 +25,7 @@ def device():
 
 def pytest_configure(config):
     """Configure pytest with custom settings."""
-    # Ensure deterministic behavior
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    # Ensure deterministic behavior (only if CUDA is available)
+    if torch.cuda.is_available():
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False

@@ -370,7 +370,9 @@ class TestPreprocessing:
         
         samples, labels, prev_labels, metadata = preprocessor.align(max_seq_length=20)
         
-        # Should have 3 samples (from 4 events, we get 3 windows)
+        # Should have 3 samples from 4 keyboard events
+        # (Each sample is the IMU window between consecutive key presses,
+        # so n events produce n-1 samples)
         assert len(samples) == 3
         assert len(labels) == 3
         assert len(prev_labels) == 3

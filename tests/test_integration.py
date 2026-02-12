@@ -326,6 +326,7 @@ class TestMultipleModelTypes:
         
         return load_preprocessed_dataset(output_path)
     
+    @pytest.mark.integration
     @pytest.mark.parametrize("model_type", ["lstm", "gru", "rnn", "transformer", "attention_lstm", "cnn"])
     def test_model_type_trains(self, prepared_dataset, model_type):
         """Test that each model type can train."""

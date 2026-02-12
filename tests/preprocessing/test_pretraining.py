@@ -20,6 +20,11 @@ from pretraining import (
 )
 from src.pre_processing.alignment import NUM_CLASSES, INDEX_TO_CHAR
 
+# Test constants
+TEST_N_SAMPLES = 50
+TEST_SEQ_LEN = 10
+TEST_FEAT_DIM = 30
+
 
 @pytest.fixture
 def temp_dir():
@@ -53,16 +58,12 @@ def sample_imu_dataframe():
 @pytest.fixture
 def sample_preprocessed_data(temp_dir):
     """Create sample preprocessed data file."""
-    n_samples = 50
-    seq_len = 10
-    feat_dim = 30
-    
-    samples = torch.randn(n_samples, seq_len, feat_dim)
-    labels = torch.randint(0, NUM_CLASSES, (n_samples,))
+    samples = torch.randn(TEST_N_SAMPLES, TEST_SEQ_LEN, TEST_FEAT_DIM)
+    labels = torch.randint(0, NUM_CLASSES, (TEST_N_SAMPLES,))
     labels_onehot = F.one_hot(labels, num_classes=NUM_CLASSES).float()
     
-    prev_labels = torch.randint(-1, NUM_CLASSES, (n_samples,))
-    prev_labels_onehot = torch.zeros(n_samples, NUM_CLASSES)
+    prev_labels = torch.randint(-1, NUM_CLASSES, (TEST_N_SAMPLES,))
+    prev_labels_onehot = torch.zeros(TEST_N_SAMPLES, NUM_CLASSES)
     valid_prev = prev_labels >= 0
     prev_labels_onehot[valid_prev] = F.one_hot(prev_labels[valid_prev], num_classes=NUM_CLASSES).float()
     
@@ -77,14 +78,14 @@ def sample_preprocessed_data(temp_dir):
     class_weights = class_weights / class_weights.sum() * NUM_CLASSES
     
     metadata = {
-        'num_samples': n_samples,
+        'num_samples': TEST_N_SAMPLES,
         'num_hands': 1,
         'has_right': False,
         'has_left': True,
-        'input_dim': feat_dim + NUM_CLASSES,
-        'feat_dim': feat_dim,
-        'features_per_hand': feat_dim,
-        'max_seq_length': seq_len,
+        'input_dim': TEST_FEAT_DIM + NUM_CLASSES,
+        'feat_dim': TEST_FEAT_DIM,
+        'features_per_hand': TEST_FEAT_DIM,
+        'max_seq_length': TEST_SEQ_LEN,
         'num_classes': NUM_CLASSES,
         'skipped_chars': {},
     }
@@ -98,7 +99,7 @@ def sample_preprocessed_data(temp_dir):
         'class_weights': class_weights,
         'metadata': metadata,
         'normalize': True,
-        'max_seq_length': seq_len,
+        'max_seq_length': TEST_SEQ_LEN,
     }
     
     pt_path = os.path.join(temp_dir, 'test_dataset.pt')
@@ -172,7 +173,7 @@ class TestPreprocessedGIKDataset:
         dataset = load_preprocessed_dataset(sample_preprocessed_data)
         
         assert isinstance(dataset, PreprocessedGIKDataset)
-        assert len(dataset) == 50
+        assert len(dataset) == TEST_N_SAMPLES
         assert dataset.input_dim > 0
     
     def test_dataset_getitem(self, sample_preprocessed_data):
