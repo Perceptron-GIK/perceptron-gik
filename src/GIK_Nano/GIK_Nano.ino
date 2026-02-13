@@ -165,7 +165,7 @@ void loop() {
     digitalWrite(LEDR, HIGH);
     digitalWrite(LEDB, HIGH);
     digitalWrite(LEDG, LOW);
-    delay(1000); // Gives sufficient time for the BLE task to initialise
+    delay(5000); // Gives sufficient time for the BLE task to initialise
 
     // Reset sample counter on each new connection
     sample_id = 0;
@@ -193,11 +193,11 @@ void loop() {
         bool f_ring = analogRead(FSR4_PIN) > THRESHOLDLOW ? 1 : 0;
         bool f_pinky = analogRead(FSR5_PIN) > THRESHOLDLOW ? 1 : 0;
 
-        Serial.print("thumb=");  Serial.print(analogRead(FSR1_PIN));
-        Serial.print(" index="); Serial.print(analogRead(FSR2_PIN));
-        Serial.print(" middle=");Serial.print(analogRead(FSR3_PIN));
-        Serial.print(" ring=");  Serial.print(analogRead(FSR4_PIN));
-        Serial.print(" pinky="); Serial.println(analogRead(FSR5_PIN));
+        // Serial.print("thumb=");  Serial.print(analogRead(FSR1_PIN));
+        // Serial.print(" index="); Serial.print(analogRead(FSR2_PIN));
+        // Serial.print(" middle=");Serial.print(analogRead(FSR3_PIN));
+        // Serial.print(" ring=");  Serial.print(analogRead(FSR4_PIN));
+        // Serial.print(" pinky="); Serial.println(analogRead(FSR5_PIN));
 
         // Read each finger IMU - library handles CS internally after begin()
         digitalWrite(CS_THUMB, LOW);
