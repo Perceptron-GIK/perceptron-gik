@@ -9,6 +9,7 @@ from typing import Callable
 from bleak import BleakScanner, BleakClient
 from datetime import datetime  
 from src.keyboard.keyboard_ext import start_keyboard, stop_event
+import cProfile
 
 # CONSTANTS 
 DEVICE_NAME_L = "GIK_Nano_L" # Left hand nano name
@@ -218,7 +219,10 @@ def handler_closure(queue: asyncio.Queue , side: str) -> Callable[[object, bytes
         t = time.time()
         
        #insert to queue
-        queue.put_nowait((received_data,t))
+        try:
+            queue.put_nowait((received_data, t))
+        except asyncio.QueueFull:
+            print(f"WARNING: {side} queue full - dropping packet") # To check whether the quesue is keeping up with the incoming data, if we see this warning frequently we may need to increase the queue size or check for bottlenecks in the writing process
 
     return handler 
 
@@ -271,7 +275,7 @@ async def connect(device_name, uuid, queue):
                 await client.start_notify(uuid, handler_closure(queue, side))
                 print(f"Connected to GIK {side} Hand – receiving data")
                 while client.is_connected and not stop_event.is_set():
-                    await asyncio.sleep(1.0) # Keep the connection alive but allow other tasks to run and reduce CPU usage
+                    await asyncio.sleep(1/(RECEIVE_RATE)) # Actually this shall be faster than it should right?
 
             # If we reach here, the client disconnected normally
             print(f"GIK {side} Hand disconnected – attempting reconnection...")
@@ -290,4 +294,6 @@ async def main():
     # Run both left and right hand connections concurrently
     await asyncio.gather(connect(DEVICE_NAME_L, UUID_TX_L, data_queue_left), connect(DEVICE_NAME_R, UUID_TX_R, data_queue_right))
 
+cProfile.run('asyncio.run(main())')
 asyncio.run(main())
+
