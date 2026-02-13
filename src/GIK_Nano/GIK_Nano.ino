@@ -162,6 +162,7 @@ void loop() {
     digitalWrite(LEDR, HIGH);
     digitalWrite(LEDB, HIGH);
     digitalWrite(LEDG, LOW);
+    delay(1000); // Gives sufficient time for the BLE task to initialise
 
     // Reset sample counter on each new connection
     sample_id = 0;
