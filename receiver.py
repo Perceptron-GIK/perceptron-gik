@@ -40,8 +40,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(SCRIPT_DIR, "data")
 
 # INITIALISATION   
-data_queue_left = asyncio.Queue(MAX_QUEUE_SIZE)
-data_queue_right = asyncio.Queue(MAX_QUEUE_SIZE)
+
 keyboard_started = False
 
 
@@ -259,6 +258,7 @@ async def connect(device_name, uuid, queue):
     
     # Start csv writer task with the already-prepared file
     csv_writer(queue, data_file)
+    await asyncio.sleep(0)
 
     # Reconnection loop (fixes Issue #10)
     retries = 0
@@ -274,8 +274,8 @@ async def connect(device_name, uuid, queue):
                 # Upon receiving notification from the nano we call the handler function
                 await client.start_notify(uuid, handler_closure(queue, side))
                 print(f"Connected to GIK {side} Hand – receiving data")
-                while client.is_connected and not stop_event.is_set():
-                    await asyncio.sleep(1/(RECEIVE_RATE)) # Actually this shall be faster than it should right?
+                # while client.is_connected and not stop_event.is_set():
+                #     await asyncio.sleep(1/(RECEIVE_RATE)) # Actually this shall be faster than it should right?
 
             # If we reach here, the client disconnected normally
             print(f"GIK {side} Hand disconnected – attempting reconnection...")
@@ -291,9 +291,13 @@ async def connect(device_name, uuid, queue):
 
 async def main():
     print(f"Waiting for GIK to appear...")
+
+    data_queue_left = asyncio.Queue(MAX_QUEUE_SIZE)
+    data_queue_right = asyncio.Queue(MAX_QUEUE_SIZE)
+
     # Run both left and right hand connections concurrently
     await asyncio.gather(connect(DEVICE_NAME_L, UUID_TX_L, data_queue_left), connect(DEVICE_NAME_R, UUID_TX_R, data_queue_right))
 
 cProfile.run('asyncio.run(main())')
-asyncio.run(main())
+# asyncio.run(main())
 
