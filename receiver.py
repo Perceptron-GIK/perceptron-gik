@@ -211,8 +211,8 @@ def handler_closure(queue: asyncio.Queue , side: str) -> Callable[[object, bytes
         # unpack the packet
         received_data = list(struct.unpack(PACKER_DTYPE_DEF, data))
         
-        # Print to terminal
-        print_data(received_data)
+        # Print to terminal (Do not uncomment this due to sample dropout issue, but useful for debugging)
+        # print_data(received_data)
     
         # Timestamp data
         t = time.time()
@@ -271,7 +271,7 @@ async def connect(device_name, uuid, queue):
                 await client.start_notify(uuid, handler_closure(queue, side))
                 print(f"Connected to GIK {side} Hand – receiving data")
                 while client.is_connected and not stop_event.is_set():
-                    await asyncio.sleep(1/RECEIVE_RATE)
+                    await asyncio.sleep(1.0) # Keep the connection alive but allow other tasks to run and reduce CPU usage
 
             # If we reach here, the client disconnected normally
             print(f"GIK {side} Hand disconnected – attempting reconnection...")
