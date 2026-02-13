@@ -24,7 +24,7 @@ assert struct.calcsize(PACKER_DTYPE_DEF) == 153 # match the packet size
 
 DEVICE_SEARCH_RATE = 2.0       # Frequency with which Bleak searches for a bluetooth device (ensure its is float)
 RECEIVE_RATE       = 100.0     # Frequency of packets being received in hertz (ensure its is float)
-MAX_QUEUE_SIZE = RECEIVE_RATE * 2 # Allow backlog of 2 seconds as
+MAX_QUEUE_SIZE = int(RECEIVE_RATE * 10) # Allow backlog of 2 seconds as
 
 OVERRIDE_SESSION_ID = False
 RIGHT_SESSION_ID = None 
@@ -33,6 +33,11 @@ KEYBOARD_SESSION_ID = 1
 
 BLE_RECONNECT_DELAY = 1.0     # Seconds to wait before attempting BLE reconnection
 BLE_MAX_RETRIES     = 10       # Max consecutive reconnection attempts before re-scanning
+
+# Add this near the top with other constants
+UNPACKER = struct.Struct(PACKER_DTYPE_DEF)
+assert UNPACKER.size == 153
+
 
 DATA_HEADER = "sample_id,ax_base,ay_base,az_base,gx_base,gy_base,gz_base,ax_thumb,ay_thumb,az_thumb,gx_thumb,gy_thumb,gz_thumb,f_thumb,ax_index,ay_index,az_index,gx_index,gy_index,gz_index,f_index,ax_middle,ay_middle,az_middle,gx_middle,gy_middle,gz_middle,f_middle,ax_ring,ay_ring,az_ring,gx_ring,gy_ring,gz_ring,f_ring,ax_pinky,ay_pinky,az_pinky,gx_pinky,gy_pinky,gz_pinky,f_pinky,time_stamp"
 
@@ -123,7 +128,7 @@ async def _csv_writer(queue: asyncio.Queue, file_name: str ):
             data = ','.join(str(x) for x in data)
             f.write(f"{data}\n")
             flush_counter += 1
-            if flush_counter >= RECEIVE_RATE: # Write to the file every second
+            if flush_counter >= (RECEIVE_RATE*2): # Write to the file every second
                 f.flush()
                 flush_counter = 0
 
@@ -194,46 +199,64 @@ def print_data(bluetooth_data: list) -> None:
 
 
 def handler_closure(queue: asyncio.Queue, side: str) -> Callable[[object, bytes], None]:
-    first_sample_id = None  # Track first sample we receive
-    last_sample_id = None   # Track for gaps
-    packet_count = 0        # Count packets received
+    first_sample_id = None
+    last_sample_id = None
+    packet_count = 0
+    gap_count = 0  # Track total missed packets
+    handler_times = []  # Track handler performance
     
     def handler(sender, data):
-        nonlocal first_sample_id, last_sample_id, packet_count
+        nonlocal first_sample_id, last_sample_id, packet_count, gap_count
+        
+        start_time = time.perf_counter()  # Start timing
         
         try:
             if len(data) != 153:
                 print(f"Unexpected length from hand {side}: {len(data)}")
                 return
             
-            received_data = list(struct.unpack(PACKER_DTYPE_DEF, data))
-            sample_id = int(received_data[0])  # First element is sample_id
+            received_data = UNPACKER.unpack(data)  # Use pre-compiled unpacker (faster)
+            sample_id = int(received_data[0])
             
-            # Track first packet received
+            # Track first packet received (print once)
             if first_sample_id is None:
                 first_sample_id = sample_id
                 print(f"\n*** {side} FIRST PACKET RECEIVED: sample_id={sample_id} ***\n")
             
-            # Detect gaps
+            # Count gaps silently (no printing each gap)
             if last_sample_id is not None:
                 expected = last_sample_id + 1
                 if sample_id != expected:
-                    gap = sample_id - expected
-                    print(f"*** {side} GAP DETECTED: Expected {expected}, got {sample_id} (missed {gap} packets) ***")
+                    gap_count += (sample_id - expected)
             
             last_sample_id = sample_id
             packet_count += 1
-            
-            # Print stats every 100 packets
-            if packet_count % 100 == 0:
-                print(f"{side}: Received {packet_count} packets, current sample_id={sample_id}")
             
             t = time.time()
             
             try:
                 queue.put_nowait((received_data, t))
             except asyncio.QueueFull:
-                print(f"*** WARNING: {side} queue full at sample_id={sample_id} - dropping packet ***")
+                print(f"*** WARNING: {side} queue full at sample_id={sample_id} ***")
+            
+            # Track handler execution time
+            elapsed_us = (time.perf_counter() - start_time) * 1_000_000  # microseconds
+            handler_times.append(elapsed_us)
+            
+            # Print summary every 250 packets
+            if packet_count % 250 == 0:
+                total_sent = packet_count + gap_count
+                loss_rate = (gap_count / total_sent) * 100 if total_sent > 0 else 0
+                
+                # Calculate handler performance
+                avg_time = sum(handler_times) / len(handler_times)
+                p95_time = sorted(handler_times)[int(len(handler_times) * 0.95)]
+                max_time = max(handler_times)
+                
+                print(f"{side}: {packet_count} received, {gap_count} missed, {loss_rate:.2f}% loss")
+                print(f"{side}: Handler avg={avg_time:.0f}µs, p95={p95_time:.0f}µs, max={max_time:.0f}µs")
+                
+                handler_times.clear()
                 
         except Exception as e:
             print(f"*** ERROR in {side} handler: {e} ***")
@@ -293,7 +316,7 @@ async def connect(device_name, uuid, queue):
                 await client.start_notify(uuid, handler_closure(queue, side))
                 print(f"Connected to GIK {side} Hand – receiving data")
                 while client.is_connected and not stop_event.is_set():
-                    await asyncio.sleep(1/(RECEIVE_RATE)) # Actually this shall be faster than it should right?
+                    await asyncio.sleep(1.0) # Actually this shall be faster than it should right?
 
             # If we reach here, the client disconnected normally
             print(f"GIK {side} Hand disconnected – attempting reconnection...")
