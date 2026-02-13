@@ -193,36 +193,53 @@ def print_data(bluetooth_data: list) -> None:
     )
 
 
-def handler_closure(queue: asyncio.Queue , side: str) -> Callable[[object, bytes], None] : 
-    """ THis is a Python closure ( Higher Order function), this is basically a trick to call the function defined inside handler with its 
-    argument structure while passing in additional arguments that will be defined only in its scope, like the queue and side.
-
-    Args:
-        queue (asyncio.Queue): Queue to which the handler will push incoming bluetooth data into in FIFO style
-        side (str): Information on which nano we are receiving data from
-
-    Returns:
-        function: handler object
-    """
-    def handler(sender ,data):
-        if len(data) != 153: # sanity check
-            print(f"Unexpected length from hand {side}", len(data))
-            return
-        # unpack the packet
-        received_data = list(struct.unpack(PACKER_DTYPE_DEF, data))
-        
-        # Print to terminal (Do not uncomment this due to sample dropout issue, but useful for debugging)
-        # print_data(received_data)
+def handler_closure(queue: asyncio.Queue, side: str) -> Callable[[object, bytes], None]:
+    first_sample_id = None  # Track first sample we receive
+    last_sample_id = None   # Track for gaps
+    packet_count = 0        # Count packets received
     
-        # Timestamp data
-        t = time.time()
+    def handler(sender, data):
+        nonlocal first_sample_id, last_sample_id, packet_count
         
-       #insert to queue
         try:
-            queue.put_nowait((received_data, t))
-        except asyncio.QueueFull:
-            print(f"WARNING: {side} queue full - dropping packet") # To check whether the quesue is keeping up with the incoming data, if we see this warning frequently we may need to increase the queue size or check for bottlenecks in the writing process
-
+            if len(data) != 153:
+                print(f"Unexpected length from hand {side}: {len(data)}")
+                return
+            
+            received_data = list(struct.unpack(PACKER_DTYPE_DEF, data))
+            sample_id = int(received_data[0])  # First element is sample_id
+            
+            # Track first packet received
+            if first_sample_id is None:
+                first_sample_id = sample_id
+                print(f"\n*** {side} FIRST PACKET RECEIVED: sample_id={sample_id} ***\n")
+            
+            # Detect gaps
+            if last_sample_id is not None:
+                expected = last_sample_id + 1
+                if sample_id != expected:
+                    gap = sample_id - expected
+                    print(f"*** {side} GAP DETECTED: Expected {expected}, got {sample_id} (missed {gap} packets) ***")
+            
+            last_sample_id = sample_id
+            packet_count += 1
+            
+            # Print stats every 100 packets
+            if packet_count % 100 == 0:
+                print(f"{side}: Received {packet_count} packets, current sample_id={sample_id}")
+            
+            t = time.time()
+            
+            try:
+                queue.put_nowait((received_data, t))
+            except asyncio.QueueFull:
+                print(f"*** WARNING: {side} queue full at sample_id={sample_id} - dropping packet ***")
+                
+        except Exception as e:
+            print(f"*** ERROR in {side} handler: {e} ***")
+            import traceback
+            traceback.print_exc()
+    
     return handler 
 
 
@@ -258,7 +275,8 @@ async def connect(device_name, uuid, queue):
     
     # Start csv writer task with the already-prepared file
     csv_writer(queue, data_file)
-    await asyncio.sleep(0)
+    await asyncio.sleep(0) # Here to make sure the CSV writer task starts before BLE
+    await asyncio.sleep(0) # Jumps the queue
 
     # Reconnection loop (fixes Issue #10)
     retries = 0
@@ -274,8 +292,8 @@ async def connect(device_name, uuid, queue):
                 # Upon receiving notification from the nano we call the handler function
                 await client.start_notify(uuid, handler_closure(queue, side))
                 print(f"Connected to GIK {side} Hand – receiving data")
-                # while client.is_connected and not stop_event.is_set():
-                #     await asyncio.sleep(1/(RECEIVE_RATE)) # Actually this shall be faster than it should right?
+                while client.is_connected and not stop_event.is_set():
+                    await asyncio.sleep(1/(RECEIVE_RATE)) # Actually this shall be faster than it should right?
 
             # If we reach here, the client disconnected normally
             print(f"GIK {side} Hand disconnected – attempting reconnection...")
@@ -298,6 +316,6 @@ async def main():
     # Run both left and right hand connections concurrently
     await asyncio.gather(connect(DEVICE_NAME_L, UUID_TX_L, data_queue_left), connect(DEVICE_NAME_R, UUID_TX_R, data_queue_right))
 
-cProfile.run('asyncio.run(main())')
-# asyncio.run(main())
+#cProfile.run('asyncio.run(main())')
+asyncio.run(main())
 
