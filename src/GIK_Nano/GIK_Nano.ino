@@ -44,6 +44,9 @@ const int CS_PINKY = 9; // Chip Select pin for talking to pinky IMU
 
 // Definition of variables for left hand
 
+unsigned long lastSendTime = 0;
+const unsigned long SEND_INTERVAL = 10000;  // Exactly 10ms in microseconds instead of with mili
+
 float ax_base = 0, ay_base = 0, az_base = 0; // accelerometer xyz from left base 
 float gx_base = 0, gy_base = 0, gz_base = 0; // gyro xyz from left base
 
@@ -167,150 +170,156 @@ void loop() {
     // Reset sample counter on each new connection
     sample_id = 0;
 
+    unsigned long lastSendTime = micros();
+
     // Only acquire IMU data and send while connected
     while (central.connected()) {
-      if (IMU.accelerationAvailable()) {
-        IMU.readAcceleration(ax_base, ay_base, az_base);
+      unsigned long currentTime = micros();
+      
+      // Only execute when 20ms has elapsed (precise 50Hz)
+      if (currentTime - lastSendTime >= SEND_INTERVAL) {
+        lastSendTime = currentTime;
+        if (IMU.accelerationAvailable()) {
+          IMU.readAcceleration(ax_base, ay_base, az_base);
+        }
+
+        if (IMU.gyroscopeAvailable()) {
+          IMU.readGyroscope(gx_base, gy_base, gz_base);
+        }
+
+        bool f_thumb = analogRead(FSR1_PIN) > THRESHOLDLOW ? 1 : 0;
+        bool f_index = analogRead(FSR2_PIN) > THRESHOLDLOW ? 1 : 0;
+        bool f_middle = analogRead(FSR3_PIN) > THRESHOLDLOW ? 1 : 0;
+        bool f_ring = analogRead(FSR4_PIN) > THRESHOLDLOW ? 1 : 0;
+        bool f_pinky = analogRead(FSR5_PIN) > THRESHOLDLOW ? 1 : 0;
+
+        Serial.print("thumb=");  Serial.print(analogRead(FSR1_PIN));
+        Serial.print(" index="); Serial.print(analogRead(FSR2_PIN));
+        Serial.print(" middle=");Serial.print(analogRead(FSR3_PIN));
+        Serial.print(" ring=");  Serial.print(analogRead(FSR4_PIN));
+        Serial.print(" pinky="); Serial.println(analogRead(FSR5_PIN));
+
+        // Read each finger IMU - library handles CS internally after begin()
+        digitalWrite(CS_THUMB, LOW);
+        BMI160.readMotionSensor(ax_thumb, ay_thumb, az_thumb, gx_thumb, gy_thumb, gz_thumb);
+        digitalWrite(CS_THUMB, HIGH);
+
+        digitalWrite(CS_INDEX, LOW); 
+        BMI160.readMotionSensor(ax_index, ay_index, az_index, gx_index, gy_index, gz_index);
+        digitalWrite(CS_INDEX, HIGH);
+
+        digitalWrite(CS_MIDDLE, LOW);
+        BMI160.readMotionSensor(ax_middle, ay_middle, az_middle, gx_middle, gy_middle, gz_middle);
+        digitalWrite(CS_MIDDLE, HIGH);
+
+        digitalWrite(CS_RING, LOW); 
+        BMI160.readMotionSensor(ax_ring, ay_ring, az_ring, gx_ring, gy_ring, gz_ring);
+        digitalWrite(CS_RING, HIGH); 
+
+        digitalWrite(CS_PINKY, LOW);
+        BMI160.readMotionSensor(ax_pinky, ay_pinky, az_pinky, gx_pinky, gy_pinky, gz_pinky);
+        digitalWrite(CS_PINKY, HIGH);
+
+        ax_tb = convertRawAccel(ax_thumb);
+        ay_tb = convertRawAccel(ay_thumb);
+        az_tb = convertRawAccel(az_thumb);
+        gx_tb = convertRawGyro(gx_thumb);
+        gy_tb = convertRawGyro(gy_thumb);
+        gz_tb = convertRawGyro(gz_thumb);
+
+        ax_id = convertRawAccel(ax_index);
+        ay_id = convertRawAccel(ay_index);
+        az_id = convertRawAccel(az_index);
+        gx_id = convertRawGyro(gx_index);
+        gy_id = convertRawGyro(gy_index);
+        gz_id = convertRawGyro(gz_index);
+
+        ax_m = convertRawAccel(ax_middle);
+        ay_m = convertRawAccel(ay_middle);
+        az_m = convertRawAccel(az_middle);
+        gx_m = convertRawGyro(gx_middle);
+        gy_m = convertRawGyro(gy_middle);
+        gz_m = convertRawGyro(gz_middle);
+
+        ax_r = convertRawAccel(ax_ring);
+        ay_r = convertRawAccel(ay_ring);
+        az_r = convertRawAccel(az_ring);
+        gx_r = convertRawGyro(gx_ring);
+        gy_r = convertRawGyro(gy_ring);
+        gz_r = convertRawGyro(gz_ring);
+
+        ax_p = convertRawAccel(ax_pinky);
+        ay_p = convertRawAccel(ay_pinky);
+        az_p = convertRawAccel(az_pinky);
+        gx_p = convertRawGyro(gx_pinky);
+        gy_p = convertRawGyro(gy_pinky);
+        gz_p = convertRawGyro(gz_pinky);
+
+        sample_id++;
+
+        uint8_t buf[153];
+        uint8_t *p = buf;
+
+        #define PACK_FLOAT(x)  do { memcpy(p, &(x), 4); p += 4; } while (0) // function to perform mem copy for each variable
+        #define PACK_BOOL(b)   do { uint8_t v = (b ? 1 : 0); *p++ = v; } while (0) // for boolean only sigle byte
+
+        memcpy(p, &sample_id, 4); p += 4;
+
+        // base IMU
+        PACK_FLOAT(ax_base);
+        PACK_FLOAT(ay_base);
+        PACK_FLOAT(az_base);
+        PACK_FLOAT(gx_base);
+        PACK_FLOAT(gy_base);
+        PACK_FLOAT(gz_base);
+
+        // thumb
+        PACK_FLOAT(ax_tb);
+        PACK_FLOAT(ay_tb);
+        PACK_FLOAT(az_tb);
+        PACK_FLOAT(gx_tb);
+        PACK_FLOAT(gy_tb);
+        PACK_FLOAT(gz_tb);
+        PACK_BOOL(f_thumb);
+
+        // index
+        PACK_FLOAT(ax_id);
+        PACK_FLOAT(ay_id);
+        PACK_FLOAT(az_id);
+        PACK_FLOAT(gx_id);
+        PACK_FLOAT(gy_id);
+        PACK_FLOAT(gz_id);
+        PACK_BOOL(f_index);
+
+        // middle
+        PACK_FLOAT(ax_m);
+        PACK_FLOAT(ay_m);
+        PACK_FLOAT(az_m);
+        PACK_FLOAT(gx_m);
+        PACK_FLOAT(gy_m);
+        PACK_FLOAT(gz_m);
+        PACK_BOOL(f_middle);
+
+        // ring
+        PACK_FLOAT(ax_r);
+        PACK_FLOAT(ay_r);
+        PACK_FLOAT(az_r);
+        PACK_FLOAT(gx_r);
+        PACK_FLOAT(gy_r);
+        PACK_FLOAT(gz_r);
+        PACK_BOOL(f_ring);
+
+        // pinky
+        PACK_FLOAT(ax_p);
+        PACK_FLOAT(ay_p);
+        PACK_FLOAT(az_p);
+        PACK_FLOAT(gx_p);
+        PACK_FLOAT(gy_p);
+        PACK_FLOAT(gz_p);
+        PACK_BOOL(f_pinky);
+
+        GIK_tx_Char.writeValue(buf, sizeof(buf));  // send out the packet
       }
-
-      if (IMU.gyroscopeAvailable()) {
-        IMU.readGyroscope(gx_base, gy_base, gz_base);
-      }
-
-      bool f_thumb = analogRead(FSR1_PIN) > THRESHOLDLOW ? 1 : 0;
-      bool f_index = analogRead(FSR2_PIN) > THRESHOLDLOW ? 1 : 0;
-      bool f_middle = analogRead(FSR3_PIN) > THRESHOLDLOW ? 1 : 0;
-      bool f_ring = analogRead(FSR4_PIN) > THRESHOLDLOW ? 1 : 0;
-      bool f_pinky = analogRead(FSR5_PIN) > THRESHOLDLOW ? 1 : 0;
-
-      Serial.print("thumb=");  Serial.print(analogRead(FSR1_PIN));
-      Serial.print(" index="); Serial.print(analogRead(FSR2_PIN));
-      Serial.print(" middle=");Serial.print(analogRead(FSR3_PIN));
-      Serial.print(" ring=");  Serial.print(analogRead(FSR4_PIN));
-      Serial.print(" pinky="); Serial.println(analogRead(FSR5_PIN));
-
-      // Read each finger IMU - library handles CS internally after begin()
-      digitalWrite(CS_THUMB, LOW);
-      BMI160.readMotionSensor(ax_thumb, ay_thumb, az_thumb, gx_thumb, gy_thumb, gz_thumb);
-      digitalWrite(CS_THUMB, HIGH);
-
-      digitalWrite(CS_INDEX, LOW); 
-      BMI160.readMotionSensor(ax_index, ay_index, az_index, gx_index, gy_index, gz_index);
-      digitalWrite(CS_INDEX, HIGH);
-
-      digitalWrite(CS_MIDDLE, LOW);
-      BMI160.readMotionSensor(ax_middle, ay_middle, az_middle, gx_middle, gy_middle, gz_middle);
-      digitalWrite(CS_MIDDLE, HIGH);
-
-      digitalWrite(CS_RING, LOW); 
-      BMI160.readMotionSensor(ax_ring, ay_ring, az_ring, gx_ring, gy_ring, gz_ring);
-      digitalWrite(CS_RING, HIGH); 
-
-      digitalWrite(CS_PINKY, LOW);
-      BMI160.readMotionSensor(ax_pinky, ay_pinky, az_pinky, gx_pinky, gy_pinky, gz_pinky);
-      digitalWrite(CS_PINKY, HIGH);
-
-      ax_tb = convertRawAccel(ax_thumb);
-      ay_tb = convertRawAccel(ay_thumb);
-      az_tb = convertRawAccel(az_thumb);
-      gx_tb = convertRawGyro(gx_thumb);
-      gy_tb = convertRawGyro(gy_thumb);
-      gz_tb = convertRawGyro(gz_thumb);
-
-      ax_id = convertRawAccel(ax_index);
-      ay_id = convertRawAccel(ay_index);
-      az_id = convertRawAccel(az_index);
-      gx_id = convertRawGyro(gx_index);
-      gy_id = convertRawGyro(gy_index);
-      gz_id = convertRawGyro(gz_index);
-
-      ax_m = convertRawAccel(ax_middle);
-      ay_m = convertRawAccel(ay_middle);
-      az_m = convertRawAccel(az_middle);
-      gx_m = convertRawGyro(gx_middle);
-      gy_m = convertRawGyro(gy_middle);
-      gz_m = convertRawGyro(gz_middle);
-
-      ax_r = convertRawAccel(ax_ring);
-      ay_r = convertRawAccel(ay_ring);
-      az_r = convertRawAccel(az_ring);
-      gx_r = convertRawGyro(gx_ring);
-      gy_r = convertRawGyro(gy_ring);
-      gz_r = convertRawGyro(gz_ring);
-
-      ax_p = convertRawAccel(ax_pinky);
-      ay_p = convertRawAccel(ay_pinky);
-      az_p = convertRawAccel(az_pinky);
-      gx_p = convertRawGyro(gx_pinky);
-      gy_p = convertRawGyro(gy_pinky);
-      gz_p = convertRawGyro(gz_pinky);
-
-      sample_id++;
-
-      uint8_t buf[153];
-      uint8_t *p = buf;
-
-      #define PACK_FLOAT(x)  do { memcpy(p, &(x), 4); p += 4; } while (0) // function to perform mem copy for each variable
-      #define PACK_BOOL(b)   do { uint8_t v = (b ? 1 : 0); *p++ = v; } while (0) // for boolean only sigle byte
-
-      memcpy(p, &sample_id, 4); p += 4;
-
-      // base IMU
-      PACK_FLOAT(ax_base);
-      PACK_FLOAT(ay_base);
-      PACK_FLOAT(az_base);
-      PACK_FLOAT(gx_base);
-      PACK_FLOAT(gy_base);
-      PACK_FLOAT(gz_base);
-
-      // thumb
-      PACK_FLOAT(ax_tb);
-      PACK_FLOAT(ay_tb);
-      PACK_FLOAT(az_tb);
-      PACK_FLOAT(gx_tb);
-      PACK_FLOAT(gy_tb);
-      PACK_FLOAT(gz_tb);
-      PACK_BOOL(f_thumb);
-
-      // index
-      PACK_FLOAT(ax_id);
-      PACK_FLOAT(ay_id);
-      PACK_FLOAT(az_id);
-      PACK_FLOAT(gx_id);
-      PACK_FLOAT(gy_id);
-      PACK_FLOAT(gz_id);
-      PACK_BOOL(f_index);
-
-      // middle
-      PACK_FLOAT(ax_m);
-      PACK_FLOAT(ay_m);
-      PACK_FLOAT(az_m);
-      PACK_FLOAT(gx_m);
-      PACK_FLOAT(gy_m);
-      PACK_FLOAT(gz_m);
-      PACK_BOOL(f_middle);
-
-      // ring
-      PACK_FLOAT(ax_r);
-      PACK_FLOAT(ay_r);
-      PACK_FLOAT(az_r);
-      PACK_FLOAT(gx_r);
-      PACK_FLOAT(gy_r);
-      PACK_FLOAT(gz_r);
-      PACK_BOOL(f_ring);
-
-      // pinky
-      PACK_FLOAT(ax_p);
-      PACK_FLOAT(ay_p);
-      PACK_FLOAT(az_p);
-      PACK_FLOAT(gx_p);
-      PACK_FLOAT(gy_p);
-      PACK_FLOAT(gz_p);
-      PACK_BOOL(f_pinky);
-
-      GIK_tx_Char.writeValue(buf, sizeof(buf));  // send out the packet
-
-      delay(10);  // ~100 Hz
     }
 
     Serial.println("Receiver disconnected");
