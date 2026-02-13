@@ -30,6 +30,9 @@ RIGHT_SESSION_ID = None
 LEFT_SESSION_ID = None
 KEYBOARD_SESSION_ID = 1
 
+BLE_RECONNECT_DELAY = 1.0     # Seconds to wait before attempting BLE reconnection
+BLE_MAX_RETRIES     = 10       # Max consecutive reconnection attempts before re-scanning
+
 DATA_HEADER = "sample_id,ax_base,ay_base,az_base,gx_base,gy_base,gz_base,ax_thumb,ay_thumb,az_thumb,gx_thumb,gy_thumb,gz_thumb,f_thumb,ax_index,ay_index,az_index,gx_index,gy_index,gz_index,f_index,ax_middle,ay_middle,az_middle,gx_middle,gy_middle,gz_middle,f_middle,ax_ring,ay_ring,az_ring,gx_ring,gy_ring,gz_ring,f_ring,ax_pinky,ay_pinky,az_pinky,gx_pinky,gy_pinky,gz_pinky,f_pinky,time_stamp"
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -80,6 +83,25 @@ def get_session_file(name: str) -> str:
     return os.path.join(DATA_DIR, f"{name}_{session_id}.csv")
 
 
+def _prepare_csv_file(side: str) -> str:
+    """Pre-initialise the CSV file and return the file path.
+
+    Creates the session file and writes the header before any BLE data
+    arrives so that initial samples are not lost (fixes Issue #3).
+
+    Args:
+        side: 'Left' or 'Right'
+
+    Returns:
+        Path to the ready-to-append CSV file.
+    """
+    data_file = get_session_file(side)
+    if not os.path.exists(data_file):
+        with open(data_file, "w") as f:
+            f.write(f"{DATA_HEADER}\n")
+    return data_file
+
+
 async def _csv_writer(queue: asyncio.Queue, file_name: str ):
     """ Async function that takes data out of the write queue and writes it a given ssv file
 
@@ -107,19 +129,13 @@ async def _csv_writer(queue: asyncio.Queue, file_name: str ):
 
 
 
-def csv_writer(queue: asyncio.Queue, side: str):
-    """Write data from the queue to a csv file.
+def csv_writer(queue: asyncio.Queue, data_file: str):
+    """Start the async CSV writer task for an already-prepared file.
 
     Args:
         queue (asyncio.Queue): Queue either Left or Right from which we want to extract data
-        side (str): specifies the arduino (either Left or Right) supplying our data
+        data_file (str): path to the CSV file (already created with header)
     """
-    data_file = get_session_file(side)
-    
-    if not os.path.exists(data_file):
-        with open(data_file, "w") as f:
-            f.write(f"{DATA_HEADER}\n")
-            
     asyncio.create_task(_csv_writer(queue, data_file))
 
 
@@ -226,11 +242,10 @@ async def connect(device_name, uuid, queue):
         side = "Right"
     elif "_L" in device_name:
         side = "Left"
-        # device_name = "Arduino"
 
-    nano = await wait_for_nano(device_name)
-    print(f"Found GIK {side} Hand")
-    
+    # Pre-initialise CSV file before BLE connection (fixes Issue #3)
+    data_file = _prepare_csv_file(side)
+
     # Start keyboard logging on first connection
     if not keyboard_started:
         keyboard_started = True
@@ -238,16 +253,36 @@ async def connect(device_name, uuid, queue):
         asyncio.create_task(start_keyboard(keyboard_file))
         print(f"Started keyboard logging at {keyboard_file}")
     
-    # Start csv writers
-    csv_writer(queue, side)
-    
-    # Main bluetooth loop
+    # Start csv writer task with the already-prepared file
+    csv_writer(queue, data_file)
+
+    # Reconnection loop (fixes Issue #10)
+    retries = 0
     while not stop_event.is_set():
-        async with BleakClient(nano.address) as client:
-            # Upon receiving notification from the nano we call the handler function
-            await client.start_notify(uuid, handler_closure(queue, side))
-            while client.is_connected and not stop_event.is_set():
-                await asyncio.sleep(1/RECEIVE_RATE)
+        try:
+            # Scan for the device (re-scan if we exhausted retries)
+            if retries == 0:
+                nano = await wait_for_nano(device_name)
+                print(f"Found GIK {side} Hand")
+
+            async with BleakClient(nano.address) as client:
+                retries = 0  # Reset retries on successful connection
+                # Upon receiving notification from the nano we call the handler function
+                await client.start_notify(uuid, handler_closure(queue, side))
+                print(f"Connected to GIK {side} Hand – receiving data")
+                while client.is_connected and not stop_event.is_set():
+                    await asyncio.sleep(1/RECEIVE_RATE)
+
+            # If we reach here, the client disconnected normally
+            print(f"GIK {side} Hand disconnected – attempting reconnection...")
+        except Exception as e:
+            retries += 1
+            print(f"GIK {side} Hand connection error (attempt {retries}): {e}")
+            if retries >= BLE_MAX_RETRIES:
+                print(f"GIK {side} Hand max retries reached – re-scanning...")
+                retries = 0  # Will trigger a fresh scan on next iteration
+
+        await asyncio.sleep(BLE_RECONNECT_DELAY)
 
 
 async def main():
