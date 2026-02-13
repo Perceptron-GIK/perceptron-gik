@@ -23,7 +23,7 @@ PACKER_DTYPE_DEF = "<I" +"f"*6 + ("f"*6 + "B")*5  # little-endian
 assert struct.calcsize(PACKER_DTYPE_DEF) == 153 # match the packet size
 
 DEVICE_SEARCH_RATE = 2.0       # Frequency with which Bleak searches for a bluetooth device (ensure its is float)
-RECEIVE_RATE       = 100.0     # Frequency of packets being received in hertz (ensure its is float)
+RECEIVE_RATE       = 25.0     # Frequency of packets being received in hertz (ensure its is float)
 MAX_QUEUE_SIZE = int(RECEIVE_RATE * 10) # Allow backlog of 2 seconds as
 
 OVERRIDE_SESSION_ID = False
