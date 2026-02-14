@@ -31,7 +31,7 @@ import sys
 import json
 
 # Import custom modules
-from src.imu.v1.main import IMUTracker
+from src.imu.main import IMUTracker
 from src.pre_processing.alignment import Preprocessing, INDEX_TO_CHAR, NUM_CLASSES
 
 
