@@ -197,12 +197,17 @@ class Preprocessing:
                 arr = self.right.df.loc[mask, right_cols].values
                 if len(arr) > 0:
                     right_win = arr
+                else:
+                    right_win = np.zeros((1,59))
+
             left_win = None
             if self.has_left:
                 mask = (self.left.df['time_stamp'] >= cur_t) & (self.left.df['time_stamp'] < next_t)
                 arr = self.left.df.loc[mask, left_cols].values
                 if len(arr) > 0:
                     left_win = arr
+                else:
+                    left_win = np.zeros((1,59))
 
             combined = self._combine_hands(right_win, left_win, max_seq_length)
             if combined is not None:
