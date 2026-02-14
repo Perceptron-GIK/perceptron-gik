@@ -92,14 +92,6 @@ class IMUTracker:
         t = 0
         while t < nSamples:
             at = a[t, np.newaxis].T
-            norm_at = np.linalg.norm(at)
-            if norm_at < 1e-6:
-                try:
-                    prev_norm_at = np.linalg.norm(a[t-1, np.newaxis].T)
-                    next_norm_at = np.linalg.norm(a[t+1, np.newaxis].T)
-                    norm_at = 0.5*(prev_norm_at + next_norm_at)
-                except:
-                    norm_at = 1.0
             gt = g[t, np.newaxis].T
 
             if self.use_mag and m is not None:
@@ -112,20 +104,19 @@ class IMUTracker:
             P = Ft @ P @ Ft.T + Q # Update state covariance
 
             pred_a = normalise(-rotate(q) @ grv) # Predicted acceleration
+            with np.errstate(divide='ignore'):
+                    Ra = [(acc_noise/np.linalg.norm(at))**2 + (1 - grm/np.linalg.norm(at))**2]*3 # Accelerometer noise
 
             if self.use_mag and m is not None:
                 pred_m = normalise(-rotate(q) @ magv) # Predicted magnetic field
 
                 # Difference between actual and predicted vectors
                 residual = np.vstack((normalise(at), mt)) - np.vstack((pred_a, pred_m))
-                Ra = [(acc_noise/norm_at)**2 + (1 - grm/norm_at)**2]*3 # Accelerometer noise
                 Rm = [mag_noise**2]*3 # Magnetometer noise
                 R = np.diag(Ra + Rm)
-
                 Ht = H(q, grv, magv) # Measurement Jacobian matrix
             else:
                 residual = normalise(at) - pred_a
-                Ra = [(acc_noise/norm_at)**2 + (1 - grm/norm_at)**2]*3
                 R = np.diag(Ra)
                 H_full = H(q, grv, magv)
                 Ht = H_full[0:3, :] # Extract accelerometer component
