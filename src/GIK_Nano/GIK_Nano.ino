@@ -165,16 +165,14 @@ void loop() {
 
     // Reset sample counter on each new connection
     sample_id = 0;
-    bool firstRun = true;  // Only initialized once
 
-    // Only acquire IMU data and send while connected
+    while (!GIK_tx_Char.subscribed() && central.connected()) {
+      delay(100);
+    }
+    
+    delay(500);
     while (central.connected()) {
   
-      if (firstRun) {
-        delay(3000);
-        firstRun = false;
-      }
-
       unsigned long startTime = micros();
 
 
@@ -320,8 +318,12 @@ void loop() {
       GIK_tx_Char.writeValue(buf, sizeof(buf));  // send out the packet
 
       unsigned long elapsed = micros() - startTime;
-      long delayNeeded = 40000 - elapsed;  // 40ms = 25Hz
-
+      long delayNeeded = 41000 - elapsed;  // 40ms = 25Hz
+      // Serial.print("Elapsed: ");
+      // Serial.print(elapsed);
+      // Serial.print("ms, Delay: ");
+      // Serial.print(delayNeeded);
+      // Serial.println("ms");
       if (delayNeeded > 1000) {
         delay(delayNeeded / 1000);
       }
