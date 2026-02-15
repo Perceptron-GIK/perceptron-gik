@@ -134,6 +134,8 @@ void setup() {
   Serial.println("After Init");
 
   BLE.setLocalName(Name);
+  BLE.setConnectionInterval(6,16); // Important: tells how often the packets should be sent (1.25ms resolution)
+  // limit is 6*1.25 = 7ms and 16*1.25ms = 20ms
   BLE.setAdvertisedService(GIK_Service);
 
   GIK_Service.addCharacteristic(GIK_tx_Char);
@@ -154,7 +156,7 @@ void loop() {
   digitalWrite(LEDG, HIGH);
   digitalWrite(LEDB, HIGH);
   digitalWrite(LEDR, LOW);
-  BLEDevice central = BLE.central();   // Wait here until receiver.py connects
+  BLEDevice central = BLE.central();   // Wait here until receiver.py connects (havent subscribe)
 
   if (central) {
     Serial.print("Connected to Receiver: ");
@@ -167,7 +169,7 @@ void loop() {
     sample_id = 0;
 
     while (!GIK_tx_Char.subscribed() && central.connected()) {
-      delay(100);
+      delay(100); // Wait until receiver.py subscribes then only move to data sending to prevent sample index loss
     }
     
     delay(500);
@@ -317,8 +319,8 @@ void loop() {
 
       GIK_tx_Char.writeValue(buf, sizeof(buf));  // send out the packet
 
-      unsigned long elapsed = micros() - startTime;
-      long delayNeeded = 41000 - elapsed;  // 40ms = 25Hz
+      unsigned long elapsed = micros() - startTime; //dynamic delay
+      long delayNeeded = 10000 - elapsed;  // set the period here in microseconds
       // Serial.print("Elapsed: ");
       // Serial.print(elapsed);
       // Serial.print("ms, Delay: ");
