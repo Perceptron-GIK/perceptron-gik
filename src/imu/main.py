@@ -55,17 +55,18 @@ class IMUTracker:
 
         return (grv, grm, magv, gyro_noise, gyro_bias, acc_noise, mag_noise)
     
-    def track_attitude(self, data, init_tuple):
+    def track_attitude(self, data, init_tuple, R0_ref=None):
         '''
         Remove the effect of gravity from acceleration data
-        Transform acceleration data into world frame
-        Track device orientation relative to the world frame
+        Transform acceleration data into keyboard frame
+        Track device orientation relative to the keyboard frame
 
         @param data: (, 9) ndarray
         @param init_tuple: Initialisation values for the EKF algorithm
         (grv, grm, magv, gyro_noise, gyro_bias, acc_noise, mag_noise)
+        @param R0_ref: Rotation matrix of the reference IMU
 
-        Return: (a_world, ori_x, ori_y, ori_z)
+        Return: (R0, a_world, ori_x, ori_y, ori_z)
         '''
 
         grv, grm, magv, gyro_noise, gyro_bias, acc_noise, mag_noise = init_tuple
@@ -83,8 +84,9 @@ class IMUTracker:
         a_world, ori_x, ori_y, ori_z = [], [], [], []
 
         P = 1e-10*I(4) # State covariance matrix
-        q = np.array([[1, 0, 0, 0]]).T # Initial quaternion state, assume alignment with world frame
-        ori_ini = I(3) # Initial orientation, assume alignment with world frame
+        q = np.array([[1, 0, 0, 0]]).T # Initial quaternion state assuming alignment with world frame
+        ori_ini = I(3) # Initial orientation assuming alignment with world frame
+        R0 = None # Initial orientation relative to world frame, estimated using IMU readings
         
         # Extended Kalman Filter (EKF)
         t = 0
@@ -102,21 +104,19 @@ class IMUTracker:
             P = Ft @ P @ Ft.T + Q # Update state covariance
 
             pred_a = normalise(-rotate(q) @ grv) # Predicted acceleration
+            with np.errstate(divide='ignore'):
+                    Ra = [(acc_noise/np.linalg.norm(at))**2 + (1 - grm/np.linalg.norm(at))**2]*3 # Accelerometer noise
 
             if self.use_mag and m is not None:
                 pred_m = normalise(-rotate(q) @ magv) # Predicted magnetic field
 
                 # Difference between actual and predicted vectors
                 residual = np.vstack((normalise(at), mt)) - np.vstack((pred_a, pred_m))
-
-                Ra = [(acc_noise/np.linalg.norm(at))**2 + (1 - grm/np.linalg.norm(at))**2]*3 # Accelerometer noise
                 Rm = [mag_noise**2]*3 # Magnetometer noise
                 R = np.diag(Ra + Rm)
-
                 Ht = H(q, grv, magv) # Measurement Jacobian matrix
             else:
                 residual = normalise(at) - pred_a
-                Ra = [(acc_noise/np.linalg.norm(at))**2 + (1 - grm/np.linalg.norm(at))**2]*3
                 R = np.diag(Ra)
                 H_full = H(q, grv, magv)
                 Ht = H_full[0:3, :] # Extract accelerometer component
@@ -132,10 +132,22 @@ class IMUTracker:
 
             conj = -I(4)
             conj[0, 0]  = 1 # Quaternion conjugation matrix
-            a_world_t = rotate(conj @ q) @ at + grv
-            a_world.append(a_world_t.T[0])
-
             ori_t = rotate(conj @ q) @ ori_ini
+            a_world_t = rotate(conj @ q) @ at + grv
+
+            # Initial orientation relative to world frame, estimated using IMU readings
+            if R0 is None:
+                R0 = ori_t.copy()
+
+            # If reference for keyboard frame is provided
+            if R0_ref is not None:
+                R_offset = R0_ref @ R0.T # Offset of the current IMU from the keyboard frame
+
+                # Rotate to align with keyboard frame
+                ori_t = R_offset @ (R0.T @ ori_t)
+                a_world_t = R_offset @ (R0.T @ a_world_t)
+
+            a_world.append(a_world_t.T[0])
             ori_x.append(ori_t.T[0, :])
             ori_y.append(ori_t.T[1, :])
             ori_z.append(ori_t.T[2, :])
@@ -146,7 +158,7 @@ class IMUTracker:
         ori_x = np.array(ori_x)
         ori_y = np.array(ori_y)
         ori_z = np.array(ori_z)
-        return (a_world, ori_x, ori_y, ori_z) # Orientation is returned for debugging or visualisation purposes only
+        return (R0, a_world, ori_x, ori_y, ori_z) # Orientation is returned for debugging or visualisation purposes only
     
     def remove_acc_drift(self, a_world, threshold=0.2, filter=False, cof=(0.01, 15)):
         '''

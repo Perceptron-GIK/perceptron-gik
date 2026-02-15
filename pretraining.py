@@ -31,7 +31,7 @@ import sys
 import json
 
 # Import custom modules
-from src.imu.v1.main import IMUTracker
+from src.imu.main import IMUTracker
 from src.pre_processing.alignment import Preprocessing, INDEX_TO_CHAR, NUM_CLASSES
 
 
@@ -56,7 +56,10 @@ def filter_imu_data(df: pd.DataFrame) -> pd.DataFrame:
         data = np.column_stack([time_rel, df[cols].values])
         try:
             init_tuple = tracker.initialise(data)
-            a, *_ = tracker.track_attitude(data, init_tuple)
+            if part == 'base': # Use the base IMU as a reference for the keyboard frame
+                R0_ref, a, *_ = tracker.track_attitude(data, init_tuple)
+            else:
+                _, a, *_ = tracker.track_attitude(data, init_tuple, R0_ref=R0_ref)
             a_p = tracker.remove_acc_drift(a, threshold=0.2, filter=True, cof=(0.1, 5))
             vel = tracker.zupt(a_p, threshold=0.2)
             pos = tracker.track_position(a, vel)

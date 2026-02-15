@@ -2,11 +2,9 @@ import numpy as np
 import scipy.signal
 
 # Normalisation
-def normalise(x):
-    try:
-        return x / np.linalg.norm(x)
-    except:
-        return x
+def normalise(x, eps=1e-12):
+    norm = np.linalg.norm(x)
+    return x if norm < eps else x / norm
 
 # Identity matrix
 def I(n):
