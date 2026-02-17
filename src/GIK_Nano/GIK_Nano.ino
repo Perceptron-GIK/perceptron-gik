@@ -320,7 +320,7 @@ void loop() {
       GIK_tx_Char.writeValue(buf, sizeof(buf));  // send out the packet
 
       unsigned long elapsed = micros() - startTime; //dynamic delay
-      long delayNeeded = 10000 - elapsed;  // set the period here in microseconds
+      long delayNeeded = 35000 - elapsed;  // set the period here in microseconds
       // Serial.print("Elapsed: ");
       // Serial.print(elapsed);
       // Serial.print("ms, Delay: ");
