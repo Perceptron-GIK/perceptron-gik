@@ -321,11 +321,7 @@ void loop() {
 
       unsigned long elapsed = micros() - startTime; //dynamic delay
       long delayNeeded = 35000 - elapsed;  // set the period here in microseconds
-      // Serial.print("Elapsed: ");
-      // Serial.print(elapsed);
-      // Serial.print("ms, Delay: ");
-      // Serial.print(delayNeeded);
-      // Serial.println("ms");
+      
       if (delayNeeded > 1000) {
         delay(delayNeeded / 1000);
       }

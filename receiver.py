@@ -23,16 +23,16 @@ PACKER_DTYPE_DEF = "<I" +"f"*6 + ("f"*6 + "B")*5  # little-endian
 assert struct.calcsize(PACKER_DTYPE_DEF) == 153 # match the packet size
 
 DEVICE_SEARCH_RATE = 2.0       # Frequency with which Bleak searches for a bluetooth device (ensure its is float)
-RECEIVE_RATE       = 100.0     # Frequency of packets being received in hertz (ensure its is float)
+RECEIVE_RATE       = 30.0     # Frequency of packets being received in hertz (ensure its is float)
+BLE_RECONNECT_DELAY = 1.0     # Seconds to wait before attempting BLE reconnection
+BLE_MAX_RETRIES     = 10       # Max consecutive reconnection attempts before re-scanning
+FLUSH_SIZE         = int(RECEIVE_RATE*2)  # Number of packets to receive before flushing to disk (e.g., every second)
 MAX_QUEUE_SIZE = int(RECEIVE_RATE *10)
 
 OVERRIDE_SESSION_ID = False
 RIGHT_SESSION_ID = None 
 LEFT_SESSION_ID = None
 KEYBOARD_SESSION_ID = 1
-
-BLE_RECONNECT_DELAY = 1.0     # Seconds to wait before attempting BLE reconnection
-BLE_MAX_RETRIES     = 10       # Max consecutive reconnection attempts before re-scanning
 
 # Add this near the top with other constants
 UNPACKER = struct.Struct(PACKER_DTYPE_DEF)
@@ -92,7 +92,7 @@ def _prepare_csv_file(side: str) -> str:
     """Pre-initialise the CSV file and return the file path.
 
     Creates the session file and writes the header before any BLE data
-    arrives so that initial samples are not lost (fixes Issue #3).
+    arrives so that initial samples are not lost.
 
     Args:
         side: 'Left' or 'Right'
@@ -128,7 +128,7 @@ async def _csv_writer(queue: asyncio.Queue, file_name: str ):
             data = ','.join(str(x) for x in data)
             f.write(f"{data}\n")
             flush_counter += 1
-            if flush_counter >= (RECEIVE_RATE*2): # Write to the file every second
+            if flush_counter >= (FLUSH_SIZE): # Write to the file every second
                 f.flush()
                 flush_counter = 0
 
@@ -301,7 +301,7 @@ async def connect(device_name, uuid, queue):
     csv_writer(queue, data_file)
     await asyncio.sleep(0) # Here to make sure the CSV writer task starts before BLE
 
-    # Reconnection loop (fixes Issue #10)
+    # Reconnection loop
     retries = 0
     while not stop_event.is_set():
         try:
@@ -320,6 +320,7 @@ async def connect(device_name, uuid, queue):
 
             # To address the Nanos disconnect suddenly without able to reconnet 
             print(f"GIK {side} Hand disconnected - attempting reconnection...")
+            retries = 0
         except Exception as e:
             retries += 1
             print(f"GIK {side} Hand connection error (attempt {retries}): {e}")
