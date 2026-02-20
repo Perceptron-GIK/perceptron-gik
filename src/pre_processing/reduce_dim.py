@@ -6,6 +6,7 @@ def reduce_dim(
         method: str,
         has_left: bool,
         has_right: bool,
+        normalise: bool,
         output_path: str
 ) -> Dict[str, int]:
     """
@@ -16,6 +17,7 @@ def reduce_dim(
         method: Method of dimensionality reduction (helper function must be defined below)
         has_left: Whether data from left hand is present
         has_right: Whether data from right hand is present
+        normalise: Whether to normalise features
         output_path: Path of output file generated from dimensionality reduction
 
     Returns:
@@ -23,7 +25,7 @@ def reduce_dim(
     """
 
     if method == "active-imu":
-        dim_bef, dim_aft = active_imu_only(data_dir, has_left, has_right, output_path)
+        dim_bef, dim_aft = active_imu_only(data_dir, has_left, has_right, normalise, output_path)
     else: # Add other dimensionality reduction methods here
         pass
 
@@ -35,7 +37,7 @@ def reduce_dim(
     return dims
 
 # Reduces feature dimension by keeping only data from the active and base IMUs
-def active_imu_only(data_dir, has_left, has_right, output_path):
+def active_imu_only(data_dir, has_left, has_right, normalise, output_path):
     data = torch.load(data_dir)
     samples = data["samples"]
     
@@ -67,10 +69,21 @@ def active_imu_only(data_dir, has_left, has_right, output_path):
     base_data = samples[:, :, base_indices]
     output = torch.cat([output, base_data], dim=2)
 
-    # Update metadata
+    # Compute normalisation stats
+    mean, std = None, None
+    if normalise:
+        all_data = torch.cat([w for w in output], dim=0)
+        mean = all_data.mean(dim=0)
+        std = all_data.std(dim=0)
+        std[std == 0] = 1.0
+
+    # Update .pt file
     data["samples"] = output
     data["metadata"]["feat_dim"] = output.shape[2]
     data["metadata"]["input_dim"] = output.shape[2] + 40
+    data["normalise"] = normalise
+    data["mean"] = mean
+    data["std"] = std
     torch.save(data, output_path)
 
     # Return feature dimension before and after dimensionality reduction
