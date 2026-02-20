@@ -67,7 +67,11 @@ def active_imu_only(data_dir, has_left, has_right, output_path):
     base_data = samples[:, :, base_indices]
     output = torch.cat([output, base_data], dim=2)
 
-    torch.save(output, output_path)
+    # Update metadata
+    data["samples"] = output
+    data["metadata"]["feat_dim"] = output.shape[2]
+    data["metadata"]["input_dim"] = output.shape[2] + 40
+    torch.save(data, output_path)
 
     # Return feature dimension before and after dimensionality reduction
     return C, output.shape[2]
