@@ -1,8 +1,5 @@
 """
 GIK Neural Network Models and Training
-
-Models: transformer (best: 24.5% test acc), attention_lstm, lstm, gru, rnn, cnn
-
 Usage:
     from pretraining import load_preprocessed_dataset
     from ml.models.basic_nn import create_model_from_dataset, GIKTrainer
@@ -12,6 +9,8 @@ Usage:
     trainer = GIKTrainer(model, dataset, learning_rate=5e-4)
     trainer.train(epochs=50)
 """
+import os
+import sys
 
 import torch
 from torch import nn
@@ -20,39 +19,10 @@ from torch.utils.data import Dataset, DataLoader, random_split, Subset
 from torch import optim
 import numpy as np
 from typing import Optional, Tuple, List, Dict, Any
-import os
-import sys
-from loss_functions.custom_losses import FocalLoss, CoordinateLoss 
-
-# Add parent directory to path to import pretraining
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-try:
-    from pretraining import (
-        PreprocessedGIKDataset,
-        load_preprocessed_dataset,
-    )
-except ImportError:
-    PreprocessedGIKDataset = None
-    load_preprocessed_dataset = None
-
-# Fixed constants
-NUM_CLASSES = 40
-
-# Character mappings
-CHAR_TO_INDEX = {}
-idx = 0
-for c in 'abcdefghijklmnopqrstuvwxyz':
-    CHAR_TO_INDEX[c] = idx
-    idx += 1
-for c in '0123456789':
-    CHAR_TO_INDEX[c] = idx
-    idx += 1
-CHAR_TO_INDEX[' '] = idx
-CHAR_TO_INDEX['\n'] = idx + 1
-CHAR_TO_INDEX['\b'] = idx + 2
-CHAR_TO_INDEX['\t'] = idx + 3
-INDEX_TO_CHAR = {v: k for k, v in CHAR_TO_INDEX.items()}
+from .default_models import (
+    TransformerModel, AttentionLSTM, LSTMModel, GRUModel, RNNModel, CNNModel
+)
+from src.pre_processing.alignment import INDEX_TO_CHAR, CHAR_TO_INDEX, NUM_CLASSES
 
 
 class GIKModelWrapper(nn.Module):
@@ -85,6 +55,7 @@ class GIKModelWrapper(nn.Module):
         num_classes: int = NUM_CLASSES,
         dropout: float = 0.3,
         pool_output: bool = False,
+        output_dim : int = NUM_CLASSES,
     ):
         super().__init__()
         
@@ -96,8 +67,8 @@ class GIKModelWrapper(nn.Module):
         # Input projection layer
         self.input_projection = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.ReLU(),
+            # nn.LayerNorm(hidden_dim),
+            # nn.ReLU(),
             # nn.Dropout(dropout)
         )
         
@@ -117,6 +88,7 @@ class GIKModelWrapper(nn.Module):
         x = self.input_projection(x)
         x = self.inner_model(x)
         
+        # If we have a channel dimension from CNN then pool it 
         if len(x.shape) == 3:
             if self.pool_output:
                 x = x.mean(dim=1)
@@ -136,232 +108,6 @@ class GIKModelWrapper(nn.Module):
         return F.softmax(logits, dim=-1)
 
 
-class LSTMModel(nn.Module):
-    """Bidirectional LSTM for sequence processing."""
-    
-    def __init__(
-        self, 
-        hidden_dim: int, 
-        num_layers: int = 2,
-        bidirectional: bool = True,
-        dropout: float = 0.2
-    ):
-        super().__init__()
-        self.hidden_dim = hidden_dim
-        self.bidirectional = bidirectional
-        
-        self.lstm = nn.LSTM(
-            input_size=hidden_dim,
-            hidden_size=hidden_dim,
-            num_layers=num_layers,
-            batch_first=True,
-            bidirectional=bidirectional,
-            dropout=dropout if num_layers > 1 else 0
-        )
-        
-        out_dim = hidden_dim * 2 if bidirectional else hidden_dim
-        self.projection = nn.Linear(out_dim, hidden_dim) if bidirectional else nn.Identity()
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out, (h_n, c_n) = self.lstm(x)
-        
-        if self.bidirectional:
-            last_out = torch.cat([out[:, -1, :self.hidden_dim], 
-                                  out[:, 0, self.hidden_dim:]], dim=-1)
-        else:
-            last_out = out[:, -1, :]
-        
-        return self.projection(last_out)
-
-
-class GRUModel(nn.Module):
-    """Bidirectional GRU for sequence processing."""
-
-    def __init__(
-        self,
-        hidden_dim: int,
-        num_layers: int = 2,
-        bidirectional: bool = True,
-        dropout: float = 0.2
-    ):
-        super().__init__()
-        self.hidden_dim = hidden_dim
-        self.bidirectional = bidirectional
-
-        self.gru = nn.GRU(
-            input_size=hidden_dim,
-            hidden_size=hidden_dim,
-            num_layers=num_layers,
-            batch_first=True,
-            bidirectional=bidirectional,
-            dropout=dropout if num_layers > 1 else 0
-        )
-
-        out_dim = hidden_dim * 2 if bidirectional else hidden_dim
-        self.projection = nn.Linear(out_dim, hidden_dim) if bidirectional else nn.Identity()
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out, h_n = self.gru(x)
-        if self.bidirectional:
-            last_out = torch.cat([out[:, -1, :self.hidden_dim], out[:, 0, self.hidden_dim:]], dim=-1)
-        else:
-            last_out = out[:, -1, :]
-        return self.projection(last_out)
-
-
-class RNNModel(nn.Module):
-    """Bidirectional Elman RNN for sequence processing."""
-
-    def __init__(
-        self,
-        hidden_dim: int,
-        num_layers: int = 2,
-        bidirectional: bool = True,
-        dropout: float = 0.2
-    ):
-        super().__init__()
-        self.hidden_dim = hidden_dim
-        self.bidirectional = bidirectional
-
-        self.rnn = nn.RNN(
-            input_size=hidden_dim,
-            hidden_size=hidden_dim,
-            num_layers=num_layers,
-            batch_first=True,
-            bidirectional=bidirectional,
-            dropout=dropout if num_layers > 1 else 0,
-            nonlinearity='tanh'
-        )
-
-        out_dim = hidden_dim * 2 if bidirectional else hidden_dim
-        self.projection = nn.Linear(out_dim, hidden_dim) if bidirectional else nn.Identity()
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out, h_n = self.rnn(x)
-        if self.bidirectional:
-            last_out = torch.cat([out[:, -1, :self.hidden_dim], out[:, 0, self.hidden_dim:]], dim=-1)
-        else:
-            last_out = out[:, -1, :]
-        return self.projection(last_out)
-
-
-class AttentionLSTM(nn.Module):
-    """LSTM with self-attention mechanism (inspired by GloveTyping paper)."""
-    
-    def __init__(
-        self,
-        hidden_dim: int,
-        num_layers: int = 2,
-        bidirectional: bool = True,
-        dropout: float = 0.2,
-        num_heads: int = 4
-    ):
-        super().__init__()
-        self.hidden_dim = hidden_dim
-        self.bidirectional = bidirectional
-        
-        self.lstm = nn.LSTM(
-            input_size=hidden_dim,
-            hidden_size=hidden_dim,
-            num_layers=num_layers,
-            batch_first=True,
-            bidirectional=bidirectional,
-            dropout=dropout if num_layers > 1 else 0
-        )
-        
-        lstm_out_dim = hidden_dim * 2 if bidirectional else hidden_dim
-        
-        self.attention = nn.MultiheadAttention(
-            embed_dim=lstm_out_dim,
-            num_heads=num_heads,
-            dropout=dropout,
-            batch_first=True
-        )
-        
-        self.layer_norm = nn.LayerNorm(lstm_out_dim)
-        self.projection = nn.Linear(lstm_out_dim, hidden_dim)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        lstm_out, _ = self.lstm(x)
-        attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out)
-        out = self.layer_norm(lstm_out + attn_out)
-        
-        if self.bidirectional:
-            last_out = torch.cat([out[:, -1, :self.hidden_dim], 
-                                  out[:, 0, self.hidden_dim:]], dim=-1)
-        else:
-            last_out = out[:, -1, :]
-        
-        return self.projection(last_out)
-
-
-class TransformerModel(nn.Module):
-    """Transformer encoder for sequence processing. Best performing model (24.5% test acc)."""
-    
-    def __init__(
-        self,
-        hidden_dim: int,
-        num_heads: int = 4,
-        num_layers: int = 2,
-        dropout: float = 0.3
-    ):
-        super().__init__()
-        
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_dim,
-            nhead=num_heads,
-            dim_feedforward=hidden_dim * 4,
-            dropout=dropout,
-            batch_first=True
-        )
-        
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        self.cls_token = nn.Parameter(torch.randn(1, 1, hidden_dim))
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        batch_size = x.shape[0]
-        cls_tokens = self.cls_token.expand(batch_size, -1, -1)
-        x = torch.cat([cls_tokens, x], dim=1)
-        x = self.transformer(x)
-        return x[:, 0, :]
-
-
-class CNNModel(nn.Module):
-    """1D CNN for sequence processing."""
-    
-    def __init__(
-        self,
-        hidden_dim: int,
-        kernel_sizes: List[int] = None,
-        dropout: float = 0.2
-    ):
-        super().__init__()
-        if kernel_sizes is None:
-            kernel_sizes = [3, 5, 7]
-        
-        self.convs = nn.ModuleList([
-            nn.Sequential(
-                nn.Conv1d(hidden_dim, hidden_dim, k, padding=k//2),
-                nn.BatchNorm1d(hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(dropout)
-            )
-            for k in kernel_sizes
-        ])
-        
-        self.projection = nn.Linear(hidden_dim * len(kernel_sizes), hidden_dim)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x.transpose(1, 2)
-        
-        conv_outputs = []
-        for conv in self.convs:
-            c = conv(x)
-            c = F.adaptive_max_pool1d(c, 1).squeeze(-1)
-            conv_outputs.append(c)
-        
-        x = torch.cat(conv_outputs, dim=-1)
-        return self.projection(x)
 class GIKTrainer:
     """
     Training utilities for GIK models.
@@ -393,11 +139,8 @@ class GIKTrainer:
         batch_size: int = 32,
         train_ratio: float = 0.8,
         val_ratio: float = 0.1,
-        test_ratio: float = 0.1,
         loss: callable = nn.CrossEntropyLoss,
-        *loss_args, 
-        **loss_kwargs,
-        
+        loss_kwargs: Optional[Dict] = None,
         
     ):
         if device is None:
@@ -428,7 +171,7 @@ class GIKTrainer:
         
         # Use Focal Loss by default (better for imbalanced classes)
         if loss is not None:
-            self.criterion = FocalLoss(gamma=focal_gamma)
+            self.criterion = loss(**loss_kwargs)
         elif hasattr(dataset, 'get_class_weights'):
             class_weights = dataset.get_class_weights().to(self.device)
             self.criterion = nn.CrossEntropyLoss(weight=class_weights)
@@ -596,14 +339,14 @@ def create_model(
     return GIKModelWrapper(inner_model, input_dim=input_dim, hidden_dim=hidden_dim)
 
 
-def create_model_from_dataset(
+def create_model_auto_input_dim(
     dataset: Dataset,
-    model_type: str = 'transformer',
+    model_type: str = 'lstm',
     hidden_dim: int = 128,
     **kwargs
 ) -> GIKModelWrapper:
     """
-    Factory function to create a model configured for a dataset. This exists only to deal with automatic Input length detection
+    Function to create a model configured for a dataset. This exists only to deal with automatic Input length detection
     
     Args:
         dataset: Dataset with input_dim property
@@ -624,7 +367,7 @@ def decode_predictions(
     """Decode model predictions to characters."""
     results = []
     for i, pred in enumerate(predictions):
-        result = {'char': INDEX_TO_CHAR.get(pred.item(), '?')}
+        result = {'char': INDEX_TO_CHAR.get(pred.item())}
         if probabilities is not None:
             result['confidence'] = probabilities[i, pred].item()
         results.append(result)
