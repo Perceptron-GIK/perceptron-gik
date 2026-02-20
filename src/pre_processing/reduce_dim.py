@@ -5,7 +5,8 @@ def reduce_dim(
         data_dir: str,
         method: str,
         has_left: bool,
-        has_right: bool
+        has_right: bool,
+        output_path: str
 ) -> Dict[str, int]:
     """
     Applies dimensionality reduction to the preprocessed dataset
@@ -15,15 +16,26 @@ def reduce_dim(
         method: Method of dimensionality reduction (helper function must be defined below)
         has_left: Whether data from left hand is present
         has_right: Whether data from right hand is present
+        output_path: Path of output file generated from dimensionality reduction
 
     Returns:
         dims dictionary with feature dimension before and after dimensionality reduction
     """
 
-    return
+    if method == "active-imu":
+        dim_bef, dim_aft = active_imu_only(data_dir, has_left, has_right, output_path)
+    else: # Add other dimensionality reduction methods here
+        pass
+
+    dims = {
+        "dim_bef": dim_bef,
+        "dim_aft": dim_aft
+    }
+
+    return dims
 
 # Reduces feature dimension by keeping only data from the active and base IMUs
-def active_imu_only(data_dir, has_left, has_right):
+def active_imu_only(data_dir, has_left, has_right, output_path):
     data = torch.load(data_dir)
     samples = data["samples"]
     
@@ -50,4 +62,12 @@ def active_imu_only(data_dir, has_left, has_right):
     # Insert a feature indicating the active finger, which is an index from 0-9
     finger_feature = finger_idx.unsqueeze(1).expand(-1, R, 1) # (W, R, 1), reshape to match data dimensions
     output = torch.cat([finger_feature, output], dim=2) # (W, R, 7)
-    print(output)
+    
+    # Insert data from base IMU
+    base_data = samples[:, :, base_indices]
+    output = torch.cat([output, base_data], dim=2)
+
+    torch.save(output, output_path)
+
+    # Return feature dimension before and after dimensionality reduction
+    return C, output.shape[2]
