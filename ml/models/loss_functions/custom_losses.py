@@ -36,7 +36,7 @@ class CoordinateLoss(nn.Module):
     
     def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         loss = F.mse_loss(inputs, targets, reduction="none") # reduction prevents aggregation of the last axis
-        weights = loss.new_tensor([h_v_ratio, 1]) # first logit is horizontal
+        weights = loss.new_tensor([self.ratio, 1]) # first logit is horizontal
         weighted_loss = weights * loss
         
         return weighted_loss.mean()
