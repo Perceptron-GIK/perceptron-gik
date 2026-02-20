@@ -52,10 +52,11 @@ class GIKModelWrapper(nn.Module):
         inner_model: nn.Module,
         input_dim: int,
         hidden_dim: int = 128,
+        inner_model_dim : int = 128,
         num_classes: int = NUM_CLASSES,
         dropout: float = 0.3,
+        n_fc_layers: int = 1,
         pool_output: bool = False,
-        output_dim : int = NUM_CLASSES,
     ):
         super().__init__()
         
@@ -66,22 +67,33 @@ class GIKModelWrapper(nn.Module):
         
         # Input projection layer
         self.input_projection = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            # nn.LayerNorm(hidden_dim),
-            # nn.ReLU(),
+            nn.Linear(input_dim, inner_model_dim),
+            nn.LayerNorm(inner_model_dim),
+            nn.ReLU(),
             # nn.Dropout(dropout)
         )
         
         # Inner model (user-provided)
         self.inner_model = inner_model
         
-        # Classification head
-        self.classifier = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
+        self.project_from_inner = nn.Sequential(
+            nn.Linear(inner_model_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
             nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim // 2, num_classes)
         )
+        
+        # FC Layers
+        layers = []
+        d = hidden_dim
+        for _ in range(n_fc_layers):
+            d_next = max(16, d // 2) # Minimum 16 Neurons
+            layers += [nn.Linear(d, d_next), nn.LayerNorm(d_next), nn.ReLU(), nn.Dropout(dropout)]
+            d = d_next
+
+        self.fc_stack = nn.Sequential(*layers)
+        
+        # Classification head
+        self.classifier = nn.Sequential(nn.Linear(d, num_classes))
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass."""
@@ -95,6 +107,8 @@ class GIKModelWrapper(nn.Module):
             else:
                 x = x[:, -1, :]
         
+        x = self.project_from_inner(x)
+        x = self.fc_stack(x)
         return self.classifier(x)
     
     def predict(self, x: torch.Tensor) -> torch.Tensor:
@@ -303,61 +317,80 @@ class GIKTrainer:
 
 def create_model(
     model_type: str = 'lstm',
-    hidden_dim: int = 128,
+    hidden_dim_inner_model: int = 128,
+    hidden_dim_classification_head: int = 256,
+    no_layers_classification_head: int = 1,
+    dropout_inner_layers = 0.5, 
+    output_logits = NUM_CLASSES,
     input_dim: int = None,
-    **kwargs
+    inner_model_kwargs = {},
 ) -> GIKModelWrapper:
     """
     Function to create a GIK model.
     
     Args:
         model_type: One of 'lstm' (best with focal loss), 'transformer', 'attention_lstm', 'gru', 'rnn', 'cnn'
-        hidden_dim: Hidden dimension size
+        hidden_dim_inner_model: Hidden dimension size for the inner model
+        hidden_dim_classification_head: Hidden dimension size for the classification Head
         input_dim: Number of input features (required)
         **kwargs: Additional arguments for the inner model
     
-    Recommended config for best accuracy (~37%): lstm with focal loss (default in GIKTrainer)
     """
     if input_dim is None:
         raise ValueError("input_dim is required - get it from dataset.input_dim")
     
     if model_type == 'transformer':
-        inner_model = TransformerModel(hidden_dim, **kwargs)
+        inner_model = TransformerModel(hidden_dim_inner_model, **inner_model_kwargs)
     elif model_type == 'attention_lstm':
-        inner_model = AttentionLSTM(hidden_dim, **kwargs)
+        inner_model = AttentionLSTM(hidden_dim_inner_model, **inner_model_kwargs)
     elif model_type == 'lstm':
-        inner_model = LSTMModel(hidden_dim, **kwargs)
+        inner_model = LSTMModel(hidden_dim_inner_model, **inner_model_kwargs)
     elif model_type == 'gru':
-        inner_model = GRUModel(hidden_dim, **kwargs)
+        inner_model = GRUModel(hidden_dim_inner_model, **inner_model_kwargs)
     elif model_type == 'rnn':
-        inner_model = RNNModel(hidden_dim, **kwargs)
+        inner_model = RNNModel(hidden_dim_inner_model, **inner_model_kwargs)
     elif model_type == 'cnn':
-        inner_model = CNNModel(hidden_dim, **kwargs)
+        inner_model = CNNModel(hidden_dim_inner_model, **inner_model_kwargs)
     else:
         raise ValueError(f"Unknown model type: {model_type}. Use: transformer, attention_lstm, lstm, gru, rnn, cnn")
     
-    return GIKModelWrapper(inner_model, input_dim=input_dim, hidden_dim=hidden_dim)
+    return GIKModelWrapper(inner_model, 
+                           input_dim=input_dim,
+                           hidden_dim=hidden_dim_classification_head, 
+                           dropout = dropout_inner_layers, 
+                           n_fc_layers = no_layers_classification_head,
+                           inner_model_dim = hidden_dim_inner_model,
+                           num_classes = output_logits)
 
 
 def create_model_auto_input_dim(
     dataset: Dataset,
     model_type: str = 'lstm',
-    hidden_dim: int = 128,
+    hidden_dim_inner_model: int = 128,
+    hidden_dim_classification_head: int = 256,
+    no_layers_classification_head: int = 1,
+    dropout_inner_layers = 0.5, 
+    output_logits = NUM_CLASSES,
+    inner_model_kwargs = {},
     **kwargs
 ) -> GIKModelWrapper:
     """
     Function to create a model configured for a dataset. This exists only to deal with automatic Input length detection
     
     Args:
-        dataset: Dataset with input_dim property
-        model_type: One of 'transformer' (best), 'attention_lstm', 'lstm', 'gru', 'rnn', 'cnn'
-        hidden_dim: Hidden dimension size
-        **kwargs: Additional arguments for the inner model
+        refer to create_model
     """
     input_dim = getattr(dataset, 'input_dim', None)
     if input_dim is None:
         raise ValueError("Dataset must have input_dim property")
-    return create_model(model_type=model_type, hidden_dim=hidden_dim, input_dim=input_dim, **kwargs)
+    return create_model(model_type=model_type,
+                        hidden_dim_inner_model=hidden_dim_inner_model,
+                        hidden_dim_classification_head = hidden_dim_classification_head,
+                        no_layers_classification_head = no_layers_classification_head,
+                        dropout_inner_layers = dropout_inner_layers,
+                        output_logits=output_logits,
+                        input_dim=input_dim, 
+                        inner_model_kwargs = inner_model_kwargs)
 
 
 def decode_predictions(
