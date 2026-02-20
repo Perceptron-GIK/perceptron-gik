@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from typing import List
 
 class CNNModel(nn.Module):
     """1D CNN for sequence processing."""

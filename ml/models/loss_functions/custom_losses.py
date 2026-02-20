@@ -4,6 +4,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
+from typing import Optional
 
 class FocalLoss(nn.Module):
     """Focal Loss for handling class imbalance. Best performance with gamma=2.0."""
