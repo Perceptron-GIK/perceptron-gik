@@ -353,17 +353,17 @@ class PreprocessedGIKDataset(Dataset):
         self._char_to_index = dict(char_to_index) if char_to_index is not None else dict(CHAR_TO_INDEX)  # alignment filters by CHAR_TO_INDEX so saved labels are in this vocab
         self.is_one_hot_labels = is_one_hot_labels
 
-        # Infer mode from first mapping value
-        first_val = next(iter(self._char_to_index.values()), None) 
-        self._is_vector = isinstance(first_val, tuple)
-        self._num_classes = max(self._char_to_index.values(), default=-1) + 1
+        # Infer mode from first mapping value: int -> index mode, tuple/list -> vector mode
+        first_val = next(iter(self._char_to_index.values()), None)
+        self._is_vector = isinstance(first_val, (tuple, list))
         if self._is_vector:
             self._label_dim = len(first_val)
-
+            self._num_classes = None
         else:
-            self._label_dim = 1
+            self._label_dim = NoneType
+            self._num_classes = max(self._char_to_index.values(), default=-1) + 1
 
-        self._input_dim = feat_dim + (self._num_classes if self.is_one_hot_labels else self._label_dim)
+        self._input_dim = feat_dim + (self._label_dim if self._is_vector else self._num_classes)
         self.mean = data['mean']
         self.std = data['std']
         self.metadata = meta

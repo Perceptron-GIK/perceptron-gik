@@ -155,8 +155,12 @@ class GIKTrainer:
         val_ratio: float = 0.1,
         loss: callable = nn.CrossEntropyLoss,
         loss_kwargs: Optional[Dict] = None,
-        
+        regression: bool = False,
     ):
+        """
+        regression: If True, labels are continuous (e.g. 2D coords); loss(logits, batch_y) and accuracy uses L1.
+        """
+        self.regression = regression
         if device is None:
             if torch.cuda.is_available():
                 device = 'cuda'
@@ -177,7 +181,7 @@ class GIKTrainer:
         self.val_dataset = Subset(dataset, range(t, v))
         self.test_dataset = Subset(dataset, range(v, n))
         
-        self.train_loader = DataLoader(self.train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+        self.train_loader = DataLoader(self.train_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
         self.val_loader = DataLoader(self.val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
         self.test_loader = DataLoader(self.test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
         
@@ -198,25 +202,36 @@ class GIKTrainer:
         total_loss = 0
         correct = 0
         total = 0
-        
+        mae_sum = 0.0
+
         for batch_x, batch_y in self.train_loader:
             batch_x = batch_x.to(self.device)
             batch_y = batch_y.to(self.device)
-            
+
             self.optimizer.zero_grad()
             logits = self.model(batch_x)
-            loss = self.criterion(logits, batch_y.argmax(dim=-1))
-            
+            if self.regression:
+                loss = self.criterion(logits, batch_y)
+                with torch.no_grad():
+                    mae_sum += (logits - batch_y).abs().sum(dim=-1).sum().item()
+            else:
+                loss = self.criterion(logits, batch_y.argmax(dim=-1))
+                pred = logits.argmax(dim=-1)
+                correct += (pred == batch_y.argmax(dim=-1)).sum().item()
+            total += batch_x.size(0)
+
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self.optimizer.step()
-            
+
             total_loss += loss.item() * batch_x.size(0)
-            pred = logits.argmax(dim=-1)
-            correct += (pred == batch_y.argmax(dim=-1)).sum().item()
-            total += batch_x.size(0)
-        
-        return total_loss / total, correct / total
+
+        if self.regression:
+            mean_mae = mae_sum / total if total else 0.0
+            acc = 1.0 / (1.0 + mean_mae)
+        else:
+            acc = correct / total if total else 0.0
+        return total_loss / total if total else 0.0, acc
     
     @torch.no_grad()
     def validate(self) -> Tuple[float, float]:
@@ -225,34 +240,54 @@ class GIKTrainer:
         total_loss = 0
         correct = 0
         total = 0
-        
+        mae_sum = 0.0
+
         for batch_x, batch_y in self.val_loader:
             batch_x = batch_x.to(self.device)
             batch_y = batch_y.to(self.device)
-            
+
             logits = self.model(batch_x)
-            loss = self.criterion(logits, batch_y.argmax(dim=-1))
-            
+            if self.regression:
+                loss = self.criterion(logits, batch_y)
+                mae_sum += (logits - batch_y).abs().sum(dim=-1).sum().item()
+            else:
+                loss = self.criterion(logits, batch_y.argmax(dim=-1))
+                pred = logits.argmax(dim=-1)
+                correct += (pred == batch_y.argmax(dim=-1)).sum().item()
             total_loss += loss.item() * batch_x.size(0)
-            pred = logits.argmax(dim=-1)
-            correct += (pred == batch_y.argmax(dim=-1)).sum().item()
             total += batch_x.size(0)
-        
-        return total_loss / total, correct / total
+
+        if self.regression:
+            mean_mae = mae_sum / total if total else 0.0
+            acc = 1.0 / (1.0 + mean_mae)
+        else:
+            acc = correct / total if total else 0.0
+        return total_loss / total if total else 0.0, acc
     
     @torch.no_grad()
     def evaluate_test(self) -> Tuple[float, float]:
         """Evaluate on the held-out test set (causal split)."""
         self.model.eval()
         total_loss, correct, total = 0.0, 0, 0
+        mae_sum = 0.0
         for batch_x, batch_y in self.test_loader:
             batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
             logits = self.model(batch_x)
-            loss = self.criterion(logits, batch_y.argmax(dim=-1))
+            if self.regression:
+                loss = self.criterion(logits, batch_y)
+                mae_sum += (logits - batch_y).abs().sum(dim=-1).sum().item()
+            else:
+                loss = self.criterion(logits, batch_y.argmax(dim=-1))
+                correct += (logits.argmax(dim=-1) == batch_y.argmax(dim=-1)).sum().item()
             total_loss += loss.item() * batch_x.size(0)
-            correct += (logits.argmax(dim=-1) == batch_y.argmax(dim=-1)).sum().item()
             total += batch_x.size(0)
-        return (total_loss / total, correct / total) if total else (0.0, 0.0)
+        if total == 0:
+            return 0.0, 0.0
+        if self.regression:
+            acc = 1.0 / (1.0 + mae_sum / total)
+        else:
+            acc = correct / total
+        return total_loss / total, acc
     
     def evaluate(self) -> Tuple[float, float]:
         """Alias for validate()."""
