@@ -183,12 +183,8 @@ class GIKTrainer:
         
         self.optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         
-        # Use Focal Loss by default (better for imbalanced classes)
         if loss is not None:
             self.criterion = loss(**loss_kwargs)
-        elif hasattr(dataset, 'get_class_weights'):
-            class_weights = dataset.get_class_weights().to(self.device)
-            self.criterion = nn.CrossEntropyLoss(weight=class_weights)
         else:
             self.criterion = nn.CrossEntropyLoss()
         
