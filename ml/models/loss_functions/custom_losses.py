@@ -40,5 +40,3 @@ class CoordinateLoss(nn.Module):
         weighted_loss = weights * loss
         
         return weighted_loss.mean()
-    
-    

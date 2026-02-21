@@ -1,16 +1,13 @@
 """
 GIK Data Alignment: align IMU sensor data with keyboard events for labeled training samples.
+Outputs samples and labels as characters; mapping (char -> index or vector) is done in the Dataset.
 
 Usage:
     from src.pre_processing.alignment import Preprocessing, CHAR_TO_INDEX
-    
-    preprocessor = Preprocessing(
-        data_dir="data/",
-        left_file="Left_1.csv",
-        right_file="Right_1.csv", 
-        keyboard_file="Keyboard_1.csv"
-    )
-    samples, labels, metadata = preprocessor.align()
+
+    preprocessor = Preprocessing(data_dir="data/", keyboard_file="K.csv", left_file="L.csv", right_file="R.csv")
+    samples, labels, prev_labels, metadata = preprocessor.align()
+    # labels / prev_labels are lists of str (characters)
 """
 
 import os
@@ -18,22 +15,22 @@ import numpy as np
 import pandas as pd
 from typing import Optional, Tuple, List, Dict, Any
 
-# Constants
+# Default vocabulary
 NUM_CLASSES = 40
 SPECIAL_KEY_MAP = {'enter': '\n', 'space': ' ', 'tab': '\t', 'backspace': '\b'}
 
-CHAR_TO_INDEX = {}
-idx = 0
+CHAR_TO_INDEX: Dict[str, int] = {}
+_idx = 0
 for c in 'abcdefghijklmnopqrstuvwxyz':
-    CHAR_TO_INDEX[c] = idx
-    idx += 1
+    CHAR_TO_INDEX[c] = _idx
+    _idx += 1
 for c in '0123456789':
-    CHAR_TO_INDEX[c] = idx
-    idx += 1
-CHAR_TO_INDEX[' '] = idx
-CHAR_TO_INDEX['\n'] = idx + 1
-CHAR_TO_INDEX['\b'] = idx + 2
-CHAR_TO_INDEX['\t'] = idx + 3
+    CHAR_TO_INDEX[c] = _idx
+    _idx += 1
+CHAR_TO_INDEX[' '] = _idx
+CHAR_TO_INDEX['\n'] = _idx + 1
+CHAR_TO_INDEX['\b'] = _idx + 2
+CHAR_TO_INDEX['\t'] = _idx + 3
 INDEX_TO_CHAR = {v: k for k, v in CHAR_TO_INDEX.items()}
 
 NON_FEATURE_COLS = {'sample_id', 'time_stamp'}
@@ -103,25 +100,14 @@ class Preprocessing:
 
     @staticmethod
     def _char_from_key(name) -> Optional[str]:
-        # Handle NaN or non-string values
+        """Convert keyboard event name to char.
+            Basically only useful for the special charecters like space, and backspace"""
         if name is None or (isinstance(name, float) and pd.isna(name)):
             return None
         if not isinstance(name, str):
             name = str(name)
         k = name.lower()
         return SPECIAL_KEY_MAP[k] if k in SPECIAL_KEY_MAP else k
-
-    @staticmethod
-    def _char_to_label(char: str) -> Optional[int]:
-        return CHAR_TO_INDEX[char] if char in CHAR_TO_INDEX else None
-
-    @staticmethod
-    def _label_to_char(label: int) -> str:
-        return INDEX_TO_CHAR[label]
-
-    @staticmethod
-    def _char_display(char: str) -> str:
-        return {' ': '<space>', '\n': '<enter>', '\t': '<tab>', '\b': '<backspace>'}.get(char, char)
 
     def __init__(
         self,
@@ -149,8 +135,8 @@ class Preprocessing:
         self,
         max_seq_length: int = 100,
         filter_func: Optional[callable] = None,
-    ) -> Tuple[List[np.ndarray], List[int], List[int], Dict[str, Any]]:
-        """Returns (samples, labels, prev_labels, metadata). prev_labels[i] is the previous key's label (-1 for first sample)."""
+    ) -> Tuple[List[np.ndarray], List[str], List[str], Dict[str, Any]]:
+        """Returns (samples, labels, prev_labels, metadata). labels and prev_labels are characters (str). prev_labels use '' for no previous."""
         samples, labels, prev_labels = [], [], []
         key_events = (
             self.keyboard.df[self.keyboard.df['event_type'] == 'down']
@@ -160,84 +146,67 @@ class Preprocessing:
 
         right_cols, left_cols = [], []
         if self.has_right:
-            self.right.df = self.right.df.sort_values('time_stamp').reset_index(drop=True)
+            self.right.df = self.right.sorted_df
             if filter_func is not None:
                 self.right.df = filter_func(self.right.df)
             right_cols = self.right.feature_columns
         if self.has_left:
-            self.left.df = self.left.df.sort_values('time_stamp').reset_index(drop=True)
+            self.left.df = self.left.sorted_df
             if filter_func is not None:
                 self.left.df = filter_func(self.left.df)
             left_cols = self.left.feature_columns
 
         skipped_chars = {}
+        last_char = None
         for i in range(len(key_events) - 1):
             cur_t, next_t = key_events.iloc[i]['time'], key_events.iloc[i + 1]['time']
             next_char = self._char_from_key(key_events.iloc[i + 1]['name'])
-            # Skip if next_char is None (NaN in data)
-            if next_char is None:
-                skipped_chars['<nan>'] = skipped_chars.get('<nan>', 0) + 1
-                continue
-            label = self._char_to_label(next_char)
-            if label is None:
-                skipped_chars[next_char] = skipped_chars.get(next_char, 0) + 1
+            if next_char is None or next_char not in CHAR_TO_INDEX:
+                key = '<nan>' if next_char is None else next_char
+                skipped_chars[key] = skipped_chars.get(key, 0) + 1
                 continue
 
-            prev_char = self._char_from_key(key_events.iloc[i]['name'])
-            # Handle None prev_char (NaN in data)
-            prev_label = -1
-            if i > 0 and prev_char is not None:
-                prev_label = self._char_to_label(prev_char)
-                if prev_label is None:
-                    prev_label = -1
+            prev_label = last_char if last_char is not None else ''
 
             right_win = None
             if self.has_right:
                 mask = (self.right.df['time_stamp'] >= cur_t) & (self.right.df['time_stamp'] < next_t)
                 arr = self.right.df.loc[mask, right_cols].values
-                if len(arr) > 0:
-                    right_win = arr
-                else:
-                    right_win = np.zeros((1,59))
+                right_win = arr if len(arr) > 0 else np.zeros((1, len(right_cols)))
 
             left_win = None
             if self.has_left:
                 mask = (self.left.df['time_stamp'] >= cur_t) & (self.left.df['time_stamp'] < next_t)
                 arr = self.left.df.loc[mask, left_cols].values
-                if len(arr) > 0:
-                    left_win = arr
-                else:
-                    left_win = np.zeros((1,59))
+                left_win = arr if len(arr) > 0 else np.zeros((1, len(left_cols)))
 
             combined = self._combine_hands(right_win, left_win, max_seq_length)
             if combined is not None:
                 samples.append(combined)
-                labels.append(label)
-                prev_labels.append(prev_label if prev_label is not None else -1)
+                labels.append(next_char)
+                prev_labels.append(prev_label)
+                last_char = next_char
 
         if skipped_chars:
-            print(f"Skipped characters not in vocabulary: {skipped_chars}")
+            print(f"Skipped characters : {skipped_chars}")
 
         n_right, n_left = len(right_cols), len(left_cols)
         feat_dim = n_right + n_left
-        num_hands = (1 if self.has_right else 0) + (1 if self.has_left else 0)
         metadata = {
             'num_samples': len(samples),
-            'num_hands': num_hands,
+            'num_hands': (1 if self.has_right else 0) + (1 if self.has_left else 0),
             'has_right': self.has_right,
             'has_left': self.has_left,
-            'input_dim': feat_dim + NUM_CLASSES,
             'feat_dim': feat_dim,
             'features_per_hand': n_right or n_left,
             'max_seq_length': max_seq_length,
-            'num_classes': NUM_CLASSES,
             'skipped_chars': skipped_chars,
         }
         return samples, labels, prev_labels, metadata
 
-    def get_class_distribution(self, labels: List[int]) -> Dict[str, int]:
+    def get_class_distribution(self, labels: List[str]) -> Dict[str, int]:
+        """Count per character."""
         dist = {}
-        for label in labels:
-            d = self._char_display(self._label_to_char(label))
-            dist[d] = dist.get(d, 0) + 1
+        for char in labels:
+            dist[char] = dist.get(char, 0) + 1
         return dict(sorted(dist.items(), key=lambda x: -x[1]))

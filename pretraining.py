@@ -25,14 +25,18 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, List, Dict, Any, Union
+
+# char_to_index in Dataset can map char -> int or char -> tuple (vector)
+LabelType = Union[int, Tuple[Union[int, float], ...], List[Union[int, float]]]
+
 import os
 import sys
 import json
 
 # Import custom modules
 from src.imu.main import IMUTracker
-from src.pre_processing.alignment import Preprocessing, INDEX_TO_CHAR, NUM_CLASSES
+from src.pre_processing.alignment import Preprocessing, CHAR_TO_INDEX
 
 
 IMU_SAMPLING_RATE = 100.0
@@ -81,7 +85,6 @@ def filter_imu_data(df: pd.DataFrame) -> pd.DataFrame:
     
     return df
 
-
 def preprocess_multiple_sources(
     data_dir: str,
     output_path: str,
@@ -94,19 +97,8 @@ def preprocess_multiple_sources(
 ) -> Dict[str, Any]:
     """
     Preprocess data from multiple source files and combine them.
-    
-    Args:
-        data_dir: Directory containing data files
-        output_path: Path to save processed dataset (.pt file)
-        keyboard_files: List of keyboard events CSV filenames
-        left_files: List of left hand IMU CSV filenames (optional)
-        right_files: List of right hand IMU CSV filenames (optional)
-        max_seq_length: Maximum sequence length
-        normalize: Whether to normalize features
-        apply_filtering: Whether to apply IMU filtering
-        
-    Returns:
-        Metadata dictionary
+    Alignment outputs labels as characters. Labels are saved as characters;
+    mapping to index/vector is done in the Dataset via char_to_index (default CHAR_TO_INDEX).
     """
     if len(keyboard_files) == 0:
         raise ValueError("At least one keyboard file must be provided")
@@ -137,7 +129,7 @@ def preprocess_multiple_sources(
     all_prev_labels = []
     total_skipped = {}
     
-    # Process each file pair
+    # Process each file combination
     for i in range(len(keyboard_files)):
         keyboard_file = keyboard_files[i]
         left_file = left_files[i] if has_left else None
@@ -149,7 +141,7 @@ def preprocess_multiple_sources(
             data_dir=data_dir,
             keyboard_file=keyboard_file,
             right_file=right_file,
-            left_file=left_file
+            left_file=left_file,
         )
         
         samples, labels, prev_labels, metadata = preprocessor.align(
@@ -171,61 +163,28 @@ def preprocess_multiple_sources(
         print(f"\nTotal skipped characters: {total_skipped}")
     
     print(f"\nProcessing {len(all_samples)} total samples...")
-    
-    # Convert to tensors
+
     samples_tensor = [torch.tensor(s, dtype=torch.float32) for s in all_samples]
-    labels_index = torch.tensor(all_labels, dtype=torch.long)
-    prev_labels_index = torch.tensor(all_prev_labels, dtype=torch.long)
-    labels_onehot = F.one_hot(labels_index, num_classes=NUM_CLASSES).float()
-    prev_labels_onehot = torch.zeros(len(all_prev_labels), NUM_CLASSES, dtype=torch.float32)
-    valid_prev = prev_labels_index >= 0
-    prev_labels_onehot[valid_prev] = F.one_hot(prev_labels_index[valid_prev], num_classes=NUM_CLASSES).float()
-    
-    # Compute normalization stats
-    mean = None
-    std = None
     if normalize:
-        all_data = torch.cat([s for s in samples_tensor], dim=0)
+        all_data = torch.cat(samples_tensor, dim=0)
         all_data = torch.nan_to_num(all_data, nan=0.0, posinf=0.0, neginf=0.0)
         mean = all_data.mean(dim=0)
         std = all_data.std(dim=0)
         std[std == 0] = 1.0
         samples_tensor = [torch.nan_to_num(s, nan=0.0, posinf=0.0, neginf=0.0) for s in samples_tensor]
-    
-    # Pad sequences to uniform length
-    padded_samples = []
-    for sample in samples_tensor:
-        seq_len = sample.shape[0]
-        if seq_len >= max_seq_length:
-            padded = sample[:max_seq_length]
-        else:
-            padding = torch.zeros(max_seq_length - seq_len, sample.shape[1])
-            padded = torch.cat([sample, padding], dim=0)
-        padded_samples.append(padded)
-    
-    if len(padded_samples) > 0:
-        samples_stacked = torch.stack(padded_samples)
     else:
-        samples_stacked = torch.tensor([])
-    
-    # Compute class weights
-    class_counts = torch.zeros(NUM_CLASSES)
-    for label in all_labels:
-        class_counts[label] += 1
-    class_weights = 1.0 / (class_counts + 1e-6)
-    class_weights = class_weights / class_weights.sum() * NUM_CLASSES
-    
-    # Build combined metadata
+        mean = std = None
+
+    samples_stacked = torch.stack(samples_tensor) if samples_tensor else torch.tensor([])
+
     combined_metadata = {
         'num_samples': len(all_samples),
         'num_hands': metadata['num_hands'],
         'has_right': metadata['has_right'],
         'has_left': metadata['has_left'],
-        'input_dim': metadata['input_dim'],
         'feat_dim': metadata['feat_dim'],
         'features_per_hand': metadata['features_per_hand'],
         'max_seq_length': max_seq_length,
-        'num_classes': NUM_CLASSES,
         'skipped_chars': total_skipped,
         'num_sources': len(keyboard_files),
         'keyboard_files': keyboard_files,
@@ -233,15 +192,13 @@ def preprocess_multiple_sources(
         'right_files': right_files if has_right else [],
         'filter_applied': apply_filtering,
     }
-    
-    # Save to disk
+
     save_dict = {
         'samples': samples_stacked,
-        'labels': labels_onehot,
-        'prev_labels': prev_labels_onehot,
+        'labels': all_labels,
+        'prev_labels': all_prev_labels,
         'mean': mean,
         'std': std,
-        'class_weights': class_weights,
         'metadata': combined_metadata,
         'normalize': normalize,
         'max_seq_length': max_seq_length,
@@ -256,143 +213,28 @@ def preprocess_multiple_sources(
     print(f"\nSaved preprocessed dataset to {output_path}")
     print(f"Saved metadata to {json_path}")
     print(f"  - Total samples: {combined_metadata['num_samples']}")
-    print(f"  - Input dim: {combined_metadata['input_dim']}")
+    print(f"  - Feat dim: {combined_metadata['feat_dim']}")
     print(f"  - Sources combined: {combined_metadata['num_sources']}")
     
     return combined_metadata
 
-
-def preprocess_and_export(
-    data_dir: str,
-    output_path: str,
-    keyboard_file: str,
-    right_file: Optional[str] = None,
-    left_file: Optional[str] = None,
-    max_seq_length: int = 100,
-    normalize: bool = True,
-    apply_filtering: bool = True
-) -> Dict[str, Any]:
+def load_preprocessed_dataset(
+    path: str,
+    char_to_index: Optional[Dict[str, LabelType]] = None,
+    is_one_hot_labels: bool = False,
+) -> 'PreprocessedGIKDataset':
     """
-    Preprocess data and export to disk using Preprocessing class.
-    
-    Args:
-        data_dir: Directory containing data files
-        output_path: Path to save processed dataset (.pt file)
-        keyboard_file: Keyboard events CSV filename
-        right_file: Right hand IMU CSV filename (optional)
-        left_file: Left hand IMU CSV filename (optional)
-        max_seq_length: Maximum sequence length
-        normalize: Whether to normalize features
-        apply_filtering: Whether to apply IMU filtering
-        
-    Returns:
-        Metadata dictionary
-    """
-    print(f"Loading data from {data_dir}...")
-    preprocessor = Preprocessing(
-        data_dir=data_dir,
-        keyboard_file=keyboard_file,
-        right_file=right_file,
-        left_file=left_file
-    )
-    
-    print(f"Aligning IMU data with keyboard events...")
-    samples, labels, prev_labels, metadata = preprocessor.align(
-        max_seq_length=max_seq_length,
-        filter_func=filter_imu_data if apply_filtering else None
-    )
-    
-    metadata['filter_applied'] = apply_filtering
-    
-    print(f"Processing {len(samples)} samples...")
-    
-    # Convert to tensors; store labels and prev_labels as one-hot
-    samples_tensor = [torch.tensor(s, dtype=torch.float32) for s in samples]
-    labels_index = torch.tensor(labels, dtype=torch.long)
-    prev_labels_index = torch.tensor(prev_labels, dtype=torch.long)
-    labels_onehot = F.one_hot(labels_index, num_classes=NUM_CLASSES).float()
-    prev_labels_onehot = torch.zeros(len(prev_labels), NUM_CLASSES, dtype=torch.float32)
-    valid_prev = prev_labels_index >= 0
-    prev_labels_onehot[valid_prev] = F.one_hot(prev_labels_index[valid_prev], num_classes=NUM_CLASSES).float()
-    
-    # Compute normalization stats
-    mean = None
-    std = None
-    if normalize:
-        all_data = torch.cat([s for s in samples_tensor], dim=0)
-        # Replace any remaining NaN/Inf with 0 before computing stats
-        all_data = torch.nan_to_num(all_data, nan=0.0, posinf=0.0, neginf=0.0)
-        mean = all_data.mean(dim=0)
-        std = all_data.std(dim=0)
-        std[std == 0] = 1.0
-        # Also clean the samples tensors
-        samples_tensor = [torch.nan_to_num(s, nan=0.0, posinf=0.0, neginf=0.0) for s in samples_tensor]
-    
-    # Pad sequences to uniform length
-    padded_samples = []
-    for sample in samples_tensor:
-        seq_len = sample.shape[0]
-        if seq_len >= max_seq_length:
-            padded = sample[:max_seq_length]
-        else:
-            padding = torch.zeros(max_seq_length - seq_len, sample.shape[1])
-            padded = torch.cat([sample, padding], dim=0)
-        padded_samples.append(padded)
-    
-    # Stack into single tensor
-    if len(padded_samples) > 0:
-        samples_stacked = torch.stack(padded_samples)
-    else:
-        samples_stacked = torch.tensor([])
-    
-    # Compute class weights (from indices)
-    class_counts = torch.zeros(NUM_CLASSES)
-    for label in labels:
-        class_counts[label] += 1
-    class_weights = 1.0 / (class_counts + 1e-6)
-    class_weights = class_weights / class_weights.sum() * NUM_CLASSES
-    
-    # Save to disk (labels and prev_labels stored as one-hot)
-    save_dict = {
-        'samples': samples_stacked,
-        'labels': labels_onehot,
-        'prev_labels': prev_labels_onehot,
-        'mean': mean,
-        'std': std,
-        'class_weights': class_weights,
-        'metadata': metadata,
-        'normalize': normalize,
-        'max_seq_length': max_seq_length,
-    }
-    
-    torch.save(save_dict, output_path)
-    
-    # Also save metadata as JSON for easy inspection
-    json_path = output_path.replace('.pt', '_metadata.json')
-    with open(json_path, 'w') as f:
-        json.dump(metadata, f, indent=2)
-    
-    print(f"Saved preprocessed dataset to {output_path}")
-    print(f"Saved metadata to {json_path}")
-    print(f"  - Samples: {metadata['num_samples']}")
-    print(f"  - Input dim: {metadata['input_dim']}")
-    print(f"  - Hands: {metadata.get('num_hands', (1 if metadata.get('has_right') else 0) + (1 if metadata.get('has_left') else 0))}")
-    
-    return metadata
+    Load a preprocessed dataset from disk. Labels are stored as characters; char_to_index is applied in the Dataset.
 
-
-def load_preprocessed_dataset(path: str) -> 'PreprocessedGIKDataset':
-    """
-    Load a preprocessed dataset from disk.
-    
     Args:
         path: Path to the .pt file
-        
+        char_to_index: char -> int or char -> vector. If None, uses CHAR_TO_INDEX from alignment.
+        one_hot_labels: If True (index mode only), __getitem__ returns one-hot labels.
+
     Returns:
         PreprocessedGIKDataset instance
     """
-    return PreprocessedGIKDataset(path)
-
+    return PreprocessedGIKDataset(path, char_to_index=char_to_index, is_one_hot_labels=is_one_hot_labels)
 
 def export_dataset_to_csv(
     pt_path: str,
@@ -418,180 +260,157 @@ def export_dataset_to_csv(
     """
     import pandas as pd
     
-    # Load dataset
     data = torch.load(pt_path, weights_only=False)
     samples = data['samples']
-    labels = data['labels']
+    prev_labels = data['prev_labels']  # list of str (characters)
+    labels = data['labels']  # list of str (characters)
     metadata = data['metadata']
-    
+
     if output_dir is None:
         output_dir = os.path.dirname(pt_path)
-    
     os.makedirs(output_dir, exist_ok=True)
-    
+
     num_samples = len(samples)
     if max_samples:
         num_samples = min(num_samples, max_samples)
-    
-    # Labels may be one-hot (N, num_classes) or indices (N,)
-    def label_to_idx(lab, i):
-        if lab.dim() == 2:
-            return lab[i].argmax().item()
-        return lab[i].item()
-    
-    # Create summary DataFrame
+
+    def char_display(c: str) -> str:
+        return {' ': 'SPACE', '\n': 'ENTER', '\b': 'BACKSPACE', '\t': 'TAB'}.get(c, c)
+
+#### SUMMARY CSV ######
     summary_data = []
     for i in range(num_samples):
         sample = samples[i].numpy()
-        label_idx = label_to_idx(labels, i)
-        char = INDEX_TO_CHAR.get(label_idx, '?')
-        
-        # Display-friendly character names
-        if char == ' ':
-            char_display = 'SPACE'
-        elif char == '\n':
-            char_display = 'ENTER'
-        elif char == '\b':
-            char_display = 'BACKSPACE'
-        elif char == '\t':
-            char_display = 'TAB'
-        else:
-            char_display = char
-        
+        char = labels[i] if i < len(labels) else '?'
+        prev_char = prev_labels[i] if i < len(prev_labels) else '?'
         summary_data.append({
             'sample_idx': i,
-            'label_idx': label_idx,
-            'character': char_display,
-            'seq_length': (sample.sum(axis=1) != 0).sum(),  # Non-zero rows
+            'character': char_display(char),
+            'seq_length': (sample.sum(axis=1) != 0).sum(),
             'feature_mean': sample.mean(),
             'feature_std': sample.std(),
             'feature_min': sample.min(),
             'feature_max': sample.max(),
+            'prev_character': char_display(prev_char),
         })
-    
     summary_df = pd.DataFrame(summary_data)
     summary_path = os.path.join(output_dir, 'dataset_summary.csv')
     summary_df.to_csv(summary_path, index=False)
     print(f"Saved summary to {summary_path}")
     
-    # Create detailed features CSV (optional, can be large)
+#### DETAIL CSV ######
     if include_features:
         features_data = []
         for i in range(num_samples):
             sample = samples[i].numpy()
-            label_idx = label_to_idx(labels, i)
-            char = INDEX_TO_CHAR.get(label_idx, '?')
-            
-            if char == ' ':
-                char_display = 'SPACE'
-            elif char == '\n':
-                char_display = 'ENTER'
-            elif char == '\b':
-                char_display = 'BACKSPACE'
-            elif char == '\t':
-                char_display = 'TAB'
-            else:
-                char_display = char
-            
-            # Add each timestep as a row
+            char = labels[i] if i < len(labels) else '?'
+            prev_char = prev_labels[i] if i < len(prev_labels) else '?'
             for t in range(sample.shape[0]):
-                row = {
-                    'sample_idx': i,
-                    'timestep': t,
-                    'label_idx': label_idx,
-                    'character': char_display,
-                }
-                # Add feature columns
+                row = {'sample_idx': i, 'timestep': t, 'character': char_display(char), 'feature_1_prev_character': char_display(prev_char)}
                 for f in range(sample.shape[1]):
-                    row[f'feature_{f}'] = sample[t, f]
+                    row[f'feature_{f+1}'] = sample[t, f]
                 features_data.append(row)
-        
         features_df = pd.DataFrame(features_data)
         features_path = os.path.join(output_dir, 'dataset_features.csv')
         features_df.to_csv(features_path, index=False)
         print(f"Saved features to {features_path}")
-    
-    # Print metadata
+
     print(f"\nDataset Info:")
     print(f"  Total samples: {len(samples)}")
     print(f"  Exported samples: {num_samples}")
-    print(f"  Input dim: {metadata['input_dim']}")
+    print(f"  Feat dim: {metadata['feat_dim']}")
     print(f"  Max seq length: {data['max_seq_length']}")
-    print(f"  Num classes: {metadata['num_classes']}")
-    
-    # Print class distribution
     print(f"\nClass Distribution:")
     for char, count in summary_df['character'].value_counts().head(15).items():
         print(f"  {char}: {count}")
-    
     return summary_path
-
 
 class PreprocessedGIKDataset(Dataset):
     """
-    PyTorch Dataset that loads preprocessed data from disk.
-    
-    This is the dataset class used for training after preprocessing.
+    Loads preprocessed data; labels are stored as characters. char_to_index (default CHAR_TO_INDEX)
+    is applied in __getitem__ to get index or vector. one_hot_labels only applies when mapping is int.
     """
-    
-    def __init__(self, path: str):
+
+    def __init__(
+        self,
+        path: str,
+        char_to_index: Optional[Dict[str, LabelType]] = None,
+        is_one_hot_labels: bool = False,
+    ):
         """
         Args:
             path: Path to preprocessed .pt file
+            char_to_index: char -> int or char -> tuple (vector). If None, uses CHAR_TO_INDEX (same as alignment filter).
+            one_hot_labels: If True and mapping is int, __getitem__ returns one-hot label.
         """
         data = torch.load(path, weights_only=False)
-        
         self.samples = data['samples']
-        labels = data['labels']
-        prev_labels = data.get('prev_labels')
-        num_classes = data['metadata']['num_classes']
-        # Ensure one-hot: convert legacy index tensors (1D) to one-hot
-        if labels.dim() == 1:
-            self.labels = F.one_hot(labels, num_classes=num_classes).float()
+        self._labels = data['labels']  # list of str
+        self._prev_labels = data['prev_labels']  # list of str, '' for no previous
+        meta = data['metadata']
+        feat_dim = meta['feat_dim']
+
+        self._char_to_index = dict(char_to_index) if char_to_index is not None else dict(CHAR_TO_INDEX)  # alignment filters by CHAR_TO_INDEX so saved labels are in this vocab
+        self.is_one_hot_labels = is_one_hot_labels
+
+        # Infer mode from first mapping value
+        first_val = next(iter(self._char_to_index.values()), None) 
+        self._is_vector = isinstance(first_val, tuple)
+        self._num_classes = max(self._char_to_index.values(), default=-1) + 1
+        if self._is_vector:
+            self._label_dim = len(first_val)
+
         else:
-            self.labels = labels
-        if prev_labels is None:
-            self.prev_labels = torch.zeros(len(self.samples), num_classes, dtype=torch.float32)
-        elif prev_labels.dim() == 1:
-            self.prev_labels = torch.zeros(len(self.samples), num_classes, dtype=torch.float32)
-            valid = prev_labels >= 0
-            self.prev_labels[valid] = F.one_hot(prev_labels[valid], num_classes=num_classes).float()
-        else:
-            self.prev_labels = prev_labels
+            self._label_dim = 1
+
+        self._input_dim = feat_dim + (self._num_classes if self.is_one_hot_labels else self._label_dim)
         self.mean = data['mean']
         self.std = data['std']
-        self.class_weights = data['class_weights']
-        self.metadata = data['metadata']
+        self.metadata = meta
         self.normalize = data['normalize']
         self.max_seq_length = data['max_seq_length']
-        
-        # Expose key properties (input_dim = feat + num_classes for prev-char)
-        self._input_dim = self.metadata['input_dim']
-        self.has_right = self.metadata.get('has_right', False)
-        self.has_left = self.metadata.get('has_left', False)
-        self.num_hands = self.metadata.get('num_hands', (1 if self.has_right else 0) + (1 if self.has_left else 0))
-    
+
     @property
     def input_dim(self) -> int:
-        """Number of input features."""
         return self._input_dim
-    
+
     def __len__(self) -> int:
         return len(self.samples)
-    
+
+    def _char_to_rep(self, char: str):
+        """Return representation (int or vector) for char; '' or unknown -> None for prev."""
+        if not char or char not in self._char_to_index:
+            return None
+        return self._char_to_index[char]
+
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Get a sample (with prev-char one-hot concat) and its one-hot label. Labels and prev_labels are one-hot."""
         sample = self.samples[idx].clone()
         if self.normalize and self.mean is not None and self.std is not None:
             sample = (sample - self.mean) / self.std
         sample = torch.nan_to_num(sample, nan=0.0, posinf=0.0, neginf=0.0)
 
-        prev_onehot = self.prev_labels[idx].clone()
-        prev_broadcast = prev_onehot.unsqueeze(0).expand(sample.size(0), -1)
+        ## Generating Previous Character's label
+        prev_char = self._prev_labels[idx]
+        prev_rep = self._char_to_rep(prev_char)
+        prev_embed = None
+        if self._is_vector:
+            prev_embed = torch.tensor(prev_rep, dtype=torch.float32) if prev_rep is not None else torch.zeros(self._label_dim, dtype=torch.float32)
+        else:
+            prev_idx = prev_rep if prev_rep is not None else -1 # previous class from 1 to 40
+            prev_embed = F.one_hot(torch.tensor(prev_idx, dtype=torch.long), self._num_classes).float() if prev_idx >= 0 else torch.zeros(self._num_classes, dtype=torch.float32)
+        ## Main logic to stack prev charecter with the IMU and FSR features
+        prev_broadcast = prev_embed.unsqueeze(0).expand(sample.size(0), -1)
         sample = torch.cat([sample, prev_broadcast], dim=-1)
 
-        label = self.labels[idx].clone()
+        ## Generating Label from character
+        char = self._labels[idx]
+        rep = self._char_to_rep(char)
+        if rep is None:
+            raise KeyError(f"Character {repr(char)} not in char_to_index")
+        if self._is_vector:
+            label = torch.tensor(rep, dtype=torch.float32)
+        elif self.is_one_hot_labels:
+            label = F.one_hot(torch.tensor(rep, dtype=torch.long), self._num_classes).float()
+        else:
+            label = torch.tensor(rep, dtype=torch.long)
         return sample, label
-    
-    def get_class_weights(self) -> torch.Tensor:
-        return self.class_weights
