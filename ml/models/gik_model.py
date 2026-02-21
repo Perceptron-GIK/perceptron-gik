@@ -69,7 +69,7 @@ class GIKModelWrapper(nn.Module):
         self.input_projection = nn.Sequential(
             nn.Linear(input_dim, inner_model_dim),
             nn.LayerNorm(inner_model_dim),
-            nn.ReLU(),
+            nn.GELU(),
             # nn.Dropout(dropout)
         )
         
@@ -79,7 +79,7 @@ class GIKModelWrapper(nn.Module):
         self.project_from_inner = nn.Sequential(
             nn.Linear(inner_model_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
-            nn.ReLU(),
+            nn.GELU(),
         )
         
         # FC Layers
@@ -87,7 +87,7 @@ class GIKModelWrapper(nn.Module):
         d = hidden_dim
         for _ in range(n_fc_layers):
             d_next = max(16, d // 2) # Minimum 16 Neurons
-            layers += [nn.Linear(d, d_next), nn.LayerNorm(d_next), nn.ReLU(), nn.Dropout(dropout)]
+            layers += [nn.Linear(d, d_next), nn.LayerNorm(d_next), nn.GELU(), nn.Dropout(dropout)]
             d = d_next
 
         self.fc_stack = nn.Sequential(*layers)
