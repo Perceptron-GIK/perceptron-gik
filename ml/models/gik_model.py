@@ -199,10 +199,7 @@ class GIKTrainer:
     def train_epoch(self) -> Tuple[float, float]:
         """Train for one epoch."""
         self.model.train()
-        total_loss = 0
-        correct = 0
-        total = 0
-        mae_sum = 0.0
+        total_loss, correct, total = 0.0, 0, 0
 
         for batch_x, batch_y in self.train_loader:
             batch_x = batch_x.to(self.device)
@@ -212,8 +209,7 @@ class GIKTrainer:
             logits = self.model(batch_x)
             if self.regression:
                 loss = self.criterion(logits, batch_y)
-                with torch.no_grad():
-                    mae_sum += (logits - batch_y).abs().sum(dim=-1).sum().item()
+                
             else:
                 loss = self.criterion(logits, batch_y.argmax(dim=-1))
                 pred = logits.argmax(dim=-1)
@@ -227,8 +223,7 @@ class GIKTrainer:
             total_loss += loss.item() * batch_x.size(0)
 
         if self.regression:
-            mean_mae = mae_sum / total if total else 0.0
-            acc = 1.0 / (1.0 + mean_mae)
+            acc = None
         else:
             acc = correct / total if total else 0.0
         return total_loss / total if total else 0.0, acc
@@ -237,10 +232,7 @@ class GIKTrainer:
     def validate(self) -> Tuple[float, float]:
         """Validate the model."""
         self.model.eval()
-        total_loss = 0
-        correct = 0
-        total = 0
-        mae_sum = 0.0
+        total_loss, correct, total = 0.0, 0, 0
 
         for batch_x, batch_y in self.val_loader:
             batch_x = batch_x.to(self.device)
@@ -249,7 +241,6 @@ class GIKTrainer:
             logits = self.model(batch_x)
             if self.regression:
                 loss = self.criterion(logits, batch_y)
-                mae_sum += (logits - batch_y).abs().sum(dim=-1).sum().item()
             else:
                 loss = self.criterion(logits, batch_y.argmax(dim=-1))
                 pred = logits.argmax(dim=-1)
@@ -258,8 +249,7 @@ class GIKTrainer:
             total += batch_x.size(0)
 
         if self.regression:
-            mean_mae = mae_sum / total if total else 0.0
-            acc = 1.0 / (1.0 + mean_mae)
+            acc = None
         else:
             acc = correct / total if total else 0.0
         return total_loss / total if total else 0.0, acc
@@ -269,25 +259,23 @@ class GIKTrainer:
         """Evaluate on the held-out test set (causal split)."""
         self.model.eval()
         total_loss, correct, total = 0.0, 0, 0
-        mae_sum = 0.0
+        
         for batch_x, batch_y in self.test_loader:
             batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
             logits = self.model(batch_x)
             if self.regression:
                 loss = self.criterion(logits, batch_y)
-                mae_sum += (logits - batch_y).abs().sum(dim=-1).sum().item()
             else:
                 loss = self.criterion(logits, batch_y.argmax(dim=-1))
                 correct += (logits.argmax(dim=-1) == batch_y.argmax(dim=-1)).sum().item()
             total_loss += loss.item() * batch_x.size(0)
             total += batch_x.size(0)
-        if total == 0:
-            return 0.0, 0.0
+
         if self.regression:
-            acc = 1.0 / (1.0 + mae_sum / total)
+            acc = None
         else:
-            acc = correct / total
-        return total_loss / total, acc
+            acc = correct / total if total else 0.0
+        return total_loss / total if total else 0.0, acc
     
     def evaluate(self) -> Tuple[float, float]:
         """Alias for validate()."""
@@ -316,12 +304,15 @@ class GIKTrainer:
             
             self.history['train_loss'].append(train_loss)
             self.history['val_loss'].append(val_loss)
-            self.history['train_acc'].append(train_acc)
-            self.history['val_acc'].append(val_acc)
+            if not self.regression:
+                self.history['train_acc'].append(train_acc)
+                self.history['val_acc'].append(val_acc)
             
-            print(f"Epoch {epoch+1:3d}/{epochs} | "
-                  f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | "
-                  f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
+            print(f"Epoch {epoch+1:3d}/{epochs} ")
+            print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} ")
+            
+            if not self.regression:
+                print(f"Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f} ")
             
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
