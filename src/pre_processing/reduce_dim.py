@@ -1,5 +1,5 @@
 import torch
-from typing import Dict
+from typing import Dict, Optional
 
 def reduce_dim(
         data_dir: str,
@@ -7,7 +7,8 @@ def reduce_dim(
         has_left: bool,
         has_right: bool,
         normalise: bool,
-        output_path: str
+        output_path: str,
+        dims_ratio: Optional[float] = None
 ) -> Dict[str, int]:
     """
     Applies dimensionality reduction to the preprocessed dataset
@@ -19,6 +20,7 @@ def reduce_dim(
         has_right: Whether data from right hand is present
         normalise: Whether to normalise features
         output_path: Path of output file generated from dimensionality reduction
+        dims_ratio: Proportion of dimensions to keep for PCA
 
     Returns:
         dims dictionary with feature dimension before and after dimensionality reduction
@@ -26,8 +28,10 @@ def reduce_dim(
 
     if method == "active-imu":
         dim_bef, dim_aft = active_imu_only(data_dir, has_left, has_right, normalise, output_path)
-    else: # Add other dimensionality reduction methods here
-        pass
+    elif method == "pca":
+        dim_bef, dim_aft = pca(data_dir, dims_ratio, output_path)
+    else:
+        raise Exception("Invalid dimensionality reduction method.")
 
     dims = {
         "dim_bef": dim_bef,
@@ -95,11 +99,43 @@ def active_imu_only(data_dir, has_left, has_right, normalise, output_path):
     # Update .pt file
     data["samples"] = output
     data["metadata"]["feat_dim"] = output.shape[2]
-    data["metadata"]["input_dim"] = output.shape[2] + 40
-    data["normalise"] = normalise
+    data["normalize"] = normalise
     data["mean"] = mean
     data["std"] = std
     torch.save(data, output_path)
 
     # Return feature dimension before and after dimensionality reduction
     return C, output.shape[2]
+
+def pca(data_dir, dims_ratio, output_path):
+    data = torch.load(data_dir)
+    samples = data["samples"]
+
+    W, R, C = samples.shape # (nWindows, nRows, nCols)
+
+    # Normalise before performing PCA
+    all_samples = torch.cat([w for w in samples], dim=0)
+    mean = all_samples.mean(dim=0)
+    std = all_samples.std(dim=0)
+    std[std == 0] = 1.0
+    samples_normalised = (all_samples - mean) / std
+
+    dims_bef = C
+    dims_aft = int(dims_bef*dims_ratio)
+
+    # PCA
+    U, S, V = torch.svd(samples_normalised)
+    output = torch.matmul(samples_normalised, V[:, :dims_aft])
+
+    output = output.reshape(W, R, dims_aft)
+
+    # Update .pt file
+    data["samples"] = output
+    data["metadata"]["feat_dim"] = dims_aft
+    data["mean"] = mean
+    data["std"] = std  
+    data["normalize"] = False # Avoid normalising again downstream  
+    torch.save(data, output_path)
+
+    # Return feature dimension before and after dimensionality reduction
+    return dims_bef, dims_aft
