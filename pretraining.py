@@ -420,10 +420,6 @@ class PreprocessedGIKDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         sample = self.samples[idx].clone()
-        if self.normalize and self.mean is not None and self.std is not None:
-            sample = (sample - self.mean) / self.std
-        sample = torch.nan_to_num(sample, nan=0.0, posinf=0.0, neginf=0.0)
-
         ## Generating Previous Character's label
         prev_char = self._prev_labels[idx]
         prev_rep = self._char_to_rep(prev_char)
