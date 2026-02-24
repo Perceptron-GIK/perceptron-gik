@@ -23,7 +23,7 @@ from .default_models import (
     TransformerModel, AttentionLSTM, LSTMModel, GRUModel, RNNModel, CNNModel
 )
 from src.pre_processing.alignment import INDEX_TO_CHAR, CHAR_TO_INDEX, NUM_CLASSES
-from src.pre_processing.data_augmentation import GIKAugmentations, AugmentedDataset
+from src.pre_processing.augmentation import GIKAugmentations, AugmentedDataset
 
 class GIKModelWrapper(nn.Module):
     """
@@ -173,10 +173,6 @@ class GIKTrainer:
         self.device = torch.device(device)
         self.model = model.to(self.device)
         self.batch_size = batch_size
-
-        augment = GIKAugmentations()
-        # augmentation boolean as the flag, if false returns the same data, if true then applies augmentation on the fly
-        self.train_dataset_aug = AugmentedDataset(self.train_dataset, augment=augment, use_augmentation=augmentation)   # or False to disable
         
         # Contiguous splits (causality-preserving, no shuffle)
         n = len(dataset)
@@ -185,6 +181,10 @@ class GIKTrainer:
         self.train_dataset = Subset(dataset, range(0, t))
         self.val_dataset = Subset(dataset, range(t, v))
         self.test_dataset = Subset(dataset, range(v, n))
+
+        augment = GIKAugmentations()
+        # augmentation boolean as the flag, if false returns the same data, if true then applies augmentation on the fly
+        self.train_dataset_aug = AugmentedDataset(self.train_dataset, augment=augment, use_augmentation=augmentation)   # or False to disable
         
         self.train_loader = DataLoader(self.train_dataset_aug, batch_size=batch_size, shuffle=True, num_workers=0) # pass in the augmented dataset here for training only
         self.val_loader = DataLoader(self.val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
