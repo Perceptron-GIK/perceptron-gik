@@ -88,13 +88,14 @@ def active_imu_only(data_dir, has_left, has_right, normalise, output_path):
     pos_data = torch.gather(samples, dim=2, index=pos_indices) # (W, R, nHands*3)
     output = torch.cat([output, pos_data], dim=2)
 
-    # Compute normalisation stats
+    # Normalisation
     mean, std = None, None
     if normalise:
         all_data = torch.cat([w for w in output], dim=0)
-        mean = all_data.mean(dim=0)
+        mean = all_data.men(dim=0)
         std = all_data.std(dim=0)
         std[std == 0] = 1.0
+    output = (output - mean) / std
 
     # Update .pt file
     data["samples"] = output
@@ -113,27 +114,17 @@ def pca(data_dir, dims_ratio, output_path):
 
     W, R, C = samples.shape # (nWindows, nRows, nCols)
 
-    # Normalise before performing PCA
-    all_samples = torch.cat([w for w in samples], dim=0)
-    mean = all_samples.mean(dim=0)
-    std = all_samples.std(dim=0)
-    std[std == 0] = 1.0
-    samples_normalised = (all_samples - mean) / std
-
     dims_bef = C
     dims_aft = int(dims_bef*dims_ratio)
 
     # PCA
-    U, S, V = torch.svd(samples_normalised)
-    output = torch.matmul(samples_normalised, V[:, :dims_aft])
-
+    U, S, V = torch.svd(samples)
+    output = torch.matmul(samples, V[:, :dims_aft])
     output = output.reshape(W, R, dims_aft)
 
     # Update .pt file
     data["samples"] = output
     data["metadata"]["feat_dim"] = dims_aft
-    data["mean"] = mean
-    data["std"] = std  
     data["normalize"] = False # Avoid normalising again downstream  
     torch.save(data, output_path)
 
