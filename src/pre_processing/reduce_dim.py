@@ -118,8 +118,9 @@ def pca(data_dir, dims_ratio, output_path):
     dims_aft = int(dims_bef*dims_ratio)
 
     # PCA
-    U, S, V = torch.svd(samples)
-    output = torch.matmul(samples, V[:, :dims_aft])
+    all_samples = torch.cat([w for w in samples], dim=0)
+    U, S, V = torch.svd(all_samples)
+    output = torch.matmul(all_samples, V[:, :dims_aft])
     output = output.reshape(W, R, dims_aft)
 
     # Update .pt file
