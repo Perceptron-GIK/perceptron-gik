@@ -46,9 +46,7 @@ class CoordinateLoss(nn.Module):
     
     
 class CoordinateLossClassification(nn.Module):
-    """Focal Loss for handling class imbalance. Best performance with gamma=2.0."""
-    
-    def __init__(self, h_v_ratio):
+    def __init__(self, h_v_ratio, bias):
         """Params for the Coordinate Loss that takes two continuous logits as inputs and measurers their coordinate differences to the target
 
         Args:
@@ -58,12 +56,17 @@ class CoordinateLossClassification(nn.Module):
         super().__init__()
         self.sigmoid = nn.Sigmoid()
         self.ratio = h_v_ratio
+        self.relu = nn.ReLU()
+        self.bias = bias
     
-    def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        x = 9 *  self.sigmoid(inputs)
-        x = torch.floor(x)
-        loss = F.mse_loss(x, targets, reduction="none") # reduction prevents aggregation of the last axis
-        weights = loss.new_tensor([self.ratio, 1]) # first logit is horizontal
-        weighted_loss = weights * loss
-        
-        return weighted_loss.mean()
+    def forward(self, inputs, targets):
+        x = self.sigmoid(inputs)
+        scale = inputs.new_tensor([9.0, 4.0])
+        x = x * scale
+
+        diff = x - targets                          # [B, 2]
+        diff = self.relu(diff.abs() - self.bias)    # Dead-zoning
+        weights = inputs.new_tensor([self.ratio, 1.0])
+        weighted_diff = weights * diff              # [B, 2]
+        dist = torch.norm(weighted_diff, dim=1)     # [B] — per-sample scaled euclidean distance
+        return dist.mean()                          # scalar
