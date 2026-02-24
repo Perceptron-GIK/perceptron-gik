@@ -123,6 +123,12 @@ def preprocess_multiple_sources(
         print(f"  Left IMU files: {left_files}")
     if has_right:
         print(f"  Right IMU files: {right_files}")
+
+    # fsr columns
+    if has_left and has_right:
+        fsr_idx = [12, 19, 26, 33, 40, 71, 78, 85, 92, 99]
+    else:
+        fsr_idx = [12, 19, 26, 33, 40]
     
     all_samples = []
     all_labels = []
@@ -165,13 +171,42 @@ def preprocess_multiple_sources(
     print(f"\nProcessing {len(all_samples)} total samples...")
 
     samples_tensor = [torch.tensor(s, dtype=torch.float32) for s in all_samples]
-    if normalize:
-        all_data = torch.cat(samples_tensor, dim=0)
-        all_data = torch.nan_to_num(all_data, nan=0.0, posinf=0.0, neginf=0.0)
-        mean = all_data.mean(dim=0)
-        std = all_data.std(dim=0)
-        std[std == 0] = 1.0
-        samples_tensor = [torch.nan_to_num(s, nan=0.0, posinf=0.0, neginf=0.0) for s in samples_tensor]
+    if normalize: # Only normalise non-FSR features and non padded samples
+        F = samples_tensor[0].shape[1]
+
+        valid_rows = []
+        for s in samples_tensor:
+            s = torch.nan_to_num(s, nan=0.0, posinf=0.0, neginf=0.0) 
+            mask_valid = (s.abs().sum(dim=1) > 0)
+            if mask_valid.any():
+                valid_rows.append(s[mask_valid])
+
+        if valid_rows:
+            all_data = torch.cat(valid_rows, dim=0)  
+            mean = all_data.mean(dim=0)           
+            std = all_data.std(dim=0)              
+            std[std == 0] = 1.0
+        else:
+            mean = torch.zeros(F)
+            std = torch.ones(F)
+
+        mask = torch.ones(F, dtype=torch.bool)
+        mask[fsr_idx] = False
+        nonfsr = mask
+        fsr = ~mask
+
+        norm_samples = []
+        for s in samples_tensor:
+            s = torch.nan_to_num(s, nan=0.0, posinf=0.0, neginf=0.0)
+            s_norm = s.clone()
+            mask_valid = (s.abs().sum(dim=1) > 0)
+            s_norm[mask_valid][:, nonfsr] = (s[mask_valid][:, nonfsr] - mean[nonfsr]) / std[nonfsr] # the forgotten line :o
+            s_norm[mask_valid][:, fsr] = s[mask_valid][:, fsr]
+            s_norm[~mask_valid] = 0.0
+
+            norm_samples.append(s_norm)
+
+        samples_tensor = norm_samples
     else:
         mean = std = None
 
@@ -385,10 +420,6 @@ class PreprocessedGIKDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         sample = self.samples[idx].clone()
-        if self.normalize and self.mean is not None and self.std is not None:
-            sample = (sample - self.mean) / self.std
-        sample = torch.nan_to_num(sample, nan=0.0, posinf=0.0, neginf=0.0)
-
         ## Generating Previous Character's label
         prev_char = self._prev_labels[idx]
         prev_rep = self._char_to_rep(prev_char)
