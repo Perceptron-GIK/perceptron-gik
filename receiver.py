@@ -9,7 +9,12 @@ from typing import Callable
 from bleak import BleakScanner, BleakClient
 from datetime import datetime  
 from src.keyboard.keyboard_ext import start_keyboard, stop_event
-import cProfile
+from src.pipeline.inference import load_model, inference_task
+from ml.models.gik_model import ModelClass # TO-DO: Update with model classes
+
+# TO-DO: Add config
+
+model = load_model(ModelClass, "model.pt") # TO-DO: Make it dependent on config
 
 # CONSTANTS 
 DEVICE_NAME_L = "GIK_Nano_L" # Left hand nano name
@@ -336,6 +341,27 @@ async def main():
 
     data_queue_left = asyncio.Queue(MAX_QUEUE_SIZE)
     data_queue_right = asyncio.Queue(MAX_QUEUE_SIZE)
+
+    # Create background tasks
+    # TO-DO: Combine left and right hand tasks, use config as args
+    asyncio.create_task(
+        inference_task(
+            queue=data_queue_left, 
+            model=model,
+            window_size=60,
+            feature_dim=59,
+            device=DEVICE
+            )
+    )
+    asyncio.create_task(
+        inference_task(
+            queue=data_queue_right, 
+            model=model,
+            window_size=60,
+            feature_dim=59,
+            device=DEVICE
+            )
+    )
 
     # Run both left and right hand connections concurrently
     await asyncio.gather(connect(DEVICE_NAME_L, UUID_TX_L, data_queue_left), connect(DEVICE_NAME_R, UUID_TX_R, data_queue_right))
