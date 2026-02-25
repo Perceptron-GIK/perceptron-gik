@@ -418,7 +418,10 @@ class PreprocessedGIKDataset(Dataset):
             self._label_dim = 1
 
         self.add_prev_char = add_prev_char
-        self._input_dim = feat_dim + (self._num_classes if self.is_one_hot_labels else self._label_dim)
+        if self.add_prev_char:
+            self._input_dim = feat_dim + (self._num_classes if self.is_one_hot_labels else self._label_dim)
+        else: 
+            self._input_dim = feat_dim
         self.mean = data['mean']
         self.std = data['std']
         self.metadata = meta
