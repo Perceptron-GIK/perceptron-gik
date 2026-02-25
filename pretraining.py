@@ -257,6 +257,7 @@ def load_preprocessed_dataset(
     path: str,
     char_to_index: Optional[Dict[str, LabelType]] = None,
     is_one_hot_labels: bool = False,
+    add_prev_char: bool = True,
 ) -> 'PreprocessedGIKDataset':
     """
     Load a preprocessed dataset from disk. Labels are stored as characters; char_to_index is applied in the Dataset.
@@ -269,13 +270,14 @@ def load_preprocessed_dataset(
     Returns:
         PreprocessedGIKDataset instance
     """
-    return PreprocessedGIKDataset(path, char_to_index=char_to_index, is_one_hot_labels=is_one_hot_labels)
+    return PreprocessedGIKDataset(path, char_to_index=char_to_index, is_one_hot_labels=is_one_hot_labels, add_prev_char=add_prev_char)
 
 def export_dataset_to_csv(
     pt_path: str,
     output_dir: str = None,
     include_features: bool = True,
-    max_samples: int = None
+    max_samples: int = None,
+    add_prev_char: bool = True
 ) -> str:
     """
     Export preprocessed dataset to CSV for inspection.
@@ -297,7 +299,7 @@ def export_dataset_to_csv(
     
     data = torch.load(pt_path, weights_only=False)
     samples = data['samples']
-    prev_labels = data['prev_labels']  # list of str (characters)
+    prev_labels = data['prev_labels'] if add_prev_char else None  # list of str (characters)
     labels = data['labels']  # list of str (characters)
     metadata = data['metadata']
 
@@ -317,17 +319,29 @@ def export_dataset_to_csv(
     for i in range(num_samples):
         sample = samples[i].numpy()
         char = labels[i] if i < len(labels) else '?'
-        prev_char = prev_labels[i] if i < len(prev_labels) else '?'
-        summary_data.append({
-            'sample_idx': i,
-            'character': char_display(char),
-            'seq_length': (sample.sum(axis=1) != 0).sum(),
-            'feature_mean': sample.mean(),
-            'feature_std': sample.std(),
-            'feature_min': sample.min(),
-            'feature_max': sample.max(),
-            'prev_character': char_display(prev_char),
-        })
+        if add_prev_char:
+            prev_char = prev_labels[i] if i < len(prev_labels) else '?'
+            summary_data.append({
+                'sample_idx': i,
+                'character': char_display(char),
+                'seq_length': (sample.sum(axis=1) != 0).sum(),
+                'feature_mean': sample.mean(),
+                'feature_std': sample.std(),
+                'feature_min': sample.min(),
+                'feature_max': sample.max(),
+                'prev_character': char_display(prev_char),
+            })
+        else:
+            summary_data.append({
+                    'sample_idx': i,
+                    'character': char_display(char),
+                    'seq_length': (sample.sum(axis=1) != 0).sum(),
+                    'feature_mean': sample.mean(),
+                    'feature_std': sample.std(),
+                    'feature_min': sample.min(),
+                    'feature_max': sample.max(),
+                })
+        
     summary_df = pd.DataFrame(summary_data)
     summary_path = os.path.join(output_dir, 'dataset_summary.csv')
     summary_df.to_csv(summary_path, index=False)
@@ -339,9 +353,13 @@ def export_dataset_to_csv(
         for i in range(num_samples):
             sample = samples[i].numpy()
             char = labels[i] if i < len(labels) else '?'
-            prev_char = prev_labels[i] if i < len(prev_labels) else '?'
+            if add_prev_char:
+                prev_char = prev_labels[i] if i < len(prev_labels) else '?'
             for t in range(sample.shape[0]):
-                row = {'sample_idx': i, 'timestep': t, 'character': char_display(char), 'feature_1_prev_character': char_display(prev_char)}
+                if add_prev_char:
+                    row = {'sample_idx': i, 'timestep': t, 'character': char_display(char), 'feature_1_prev_character': char_display(prev_char)} 
+                else:
+                    row = {'sample_idx': i, 'timestep': t, 'character': char_display(char)} 
                 for f in range(sample.shape[1]):
                     row[f'feature_{f+1}'] = sample[t, f]
                 features_data.append(row)
@@ -371,6 +389,7 @@ class PreprocessedGIKDataset(Dataset):
         path: str,
         char_to_index: Optional[Dict[str, LabelType]] = None,
         is_one_hot_labels: bool = False,
+        add_prev_char: bool = True,
     ):
         """
         Args:
@@ -398,6 +417,7 @@ class PreprocessedGIKDataset(Dataset):
         else:
             self._label_dim = 1
 
+        self.add_prev_char = add_prev_char
         self._input_dim = feat_dim + (self._num_classes if self.is_one_hot_labels else self._label_dim)
         self.mean = data['mean']
         self.std = data['std']
@@ -421,17 +441,18 @@ class PreprocessedGIKDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         sample = self.samples[idx].clone()
         ## Generating Previous Character's label
-        prev_char = self._prev_labels[idx]
-        prev_rep = self._char_to_rep(prev_char)
-        prev_embed = None
-        if self._is_vector:
-            prev_embed = torch.tensor(prev_rep, dtype=torch.float32) if prev_rep is not None else torch.zeros(self._label_dim, dtype=torch.float32)
-        else:
-            prev_idx = prev_rep if prev_rep is not None else -1 # previous class from 1 to 40
-            prev_embed = F.one_hot(torch.tensor(prev_idx, dtype=torch.long), self._num_classes).float() if prev_idx >= 0 else torch.zeros(self._num_classes, dtype=torch.float32)
-        ## Main logic to stack prev charecter with the IMU and FSR features
-        prev_broadcast = prev_embed.unsqueeze(0).expand(sample.size(0), -1)
-        sample = torch.cat([sample, prev_broadcast], dim=-1)
+        if self.add_prev_char :
+            prev_char = self._prev_labels[idx]
+            prev_rep = self._char_to_rep(prev_char)
+            prev_embed = None
+            if self._is_vector:
+                prev_embed = torch.tensor(prev_rep, dtype=torch.float32) if prev_rep is not None else torch.zeros(self._label_dim, dtype=torch.float32)
+            else:
+                prev_idx = prev_rep if prev_rep is not None else -1 # previous class from 1 to 40
+                prev_embed = F.one_hot(torch.tensor(prev_idx, dtype=torch.long), self._num_classes).float() if prev_idx >= 0 else torch.zeros(self._num_classes, dtype=torch.float32)
+            ## Main logic to stack prev charecter with the IMU and FSR features
+            prev_broadcast = prev_embed.unsqueeze(0).expand(sample.size(0), -1)
+            sample = torch.cat([sample, prev_broadcast], dim=-1)
 
         ## Generating Label from character
         char = self._labels[idx]
