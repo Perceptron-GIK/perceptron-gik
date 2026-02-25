@@ -418,7 +418,10 @@ class PreprocessedGIKDataset(Dataset):
             self._num_classes = max(self._char_to_index.values(), default=-1) + 1
 
         self.add_prev_char = add_prev_char
-        self._input_dim = feat_dim + (self._label_dim if self._is_vector else self._num_classes)
+        if self.add_prev_char:
+            self._input_dim = feat_dim + (self._label_dim if self._is_vector else self._num_classes) # one-hot is implicitly assumed for direct classification
+        else: 
+            self._input_dim = feat_dim
         self.mean = data['mean']
         self.std = data['std']
         self.metadata = meta
