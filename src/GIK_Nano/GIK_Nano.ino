@@ -3,8 +3,8 @@
 // The sensor values are sent to the receiver via Bluetooth service with the MTU size of 153 bytes
 //--------------------------------------------------------------------------------------------------------------------
 
-//#define LEFT_HAND  // Define this as left hand 
-#define RIGHT_HAND  // Define this as right hand
+#define LEFT_HAND  // Define this as left hand 
+// #define RIGHT_HAND  // Define this as right hand
 #include "GIK_Hand_Config.h"  // Include the hand configuration file
 #include <ArduinoBLE.h>
 #include "Arduino_BMI270_BMM150.h"
@@ -39,8 +39,8 @@ const int CS_PINKY = 6; // Chip Select pin for talking to pinky IMU
 #define FSR3_PIN A2
 #define FSR4_PIN A3
 #define FSR5_PIN A6
-#define THRESHOLDHIGH 300
-#define THRESHOLDLOW 5
+#define THRESHOLD 5
+#define THRESHOLDLOW 3
 
 // Definition of variables for left hand
 
@@ -173,6 +173,12 @@ void loop() {
     }
     
     delay(500);
+
+    int last_thumb = analogRead(FSR1_PIN);
+    int last_index = analogRead(FSR2_PIN);
+    int last_middle = analogRead(FSR3_PIN);
+    int last_ring = analogRead(FSR4_PIN);
+    int last_pinky = analogRead(FSR5_PIN);
     while (central.connected()) {
   
       unsigned long startTime = micros();
@@ -186,17 +192,33 @@ void loop() {
         IMU.readGyroscope(gx_base, gy_base, gz_base);
       }
 
-      bool f_thumb = analogRead(FSR1_PIN) > THRESHOLDLOW ? 1 : 0;
-      bool f_index = analogRead(FSR2_PIN) > THRESHOLDLOW ? 1 : 0;
-      bool f_middle = analogRead(FSR3_PIN) > THRESHOLDLOW ? 1 : 0;
-      bool f_ring = analogRead(FSR4_PIN) > THRESHOLDLOW ? 1 : 0;
-      bool f_pinky = analogRead(FSR5_PIN) > THRESHOLDLOW ? 1 : 0;
+      int current_thumb = analogRead(FSR1_PIN);
+      bool f_thumb = current_thumb - last_thumb > THRESHOLDLOW ? 1 : 0;
+      int current_index = analogRead(FSR2_PIN);
+      bool f_index = current_index - last_index > THRESHOLD ? 1 : 0;
+      int current_middle = analogRead(FSR3_PIN);
+      bool f_middle = current_middle - last_middle > THRESHOLD ? 1 : 0;
+      int current_ring = analogRead(FSR4_PIN);
+      bool f_ring = current_ring - last_ring > THRESHOLD ? 1 : 0;
+      int current_pinky = analogRead(FSR5_PIN);
+      bool f_pinky = current_pinky - last_pinky > THRESHOLDLOW ? 1 : 0;
+
+      last_thumb = current_thumb;
+      last_index = current_index;
+      last_middle = current_middle;
+      last_ring = current_ring;
+      last_pinky = current_pinky;
 
       // Serial.print("thumb=");  Serial.print(analogRead(FSR1_PIN));
       // Serial.print(" index="); Serial.print(analogRead(FSR2_PIN));
       // Serial.print(" middle=");Serial.print(analogRead(FSR3_PIN));
       // Serial.print(" ring=");  Serial.print(analogRead(FSR4_PIN));
       // Serial.print(" pinky="); Serial.println(analogRead(FSR5_PIN));
+      Serial.print("thumb=");  Serial.print(f_thumb);
+      Serial.print(" index="); Serial.print(f_index);
+      Serial.print(" middle=");Serial.print(f_middle);
+      Serial.print(" ring=");  Serial.print(f_ring);
+      Serial.print(" pinky="); Serial.println(f_pinky);
 
       // Read each finger IMU - library handles CS internally after begin()
       digitalWrite(CS_THUMB, LOW);
