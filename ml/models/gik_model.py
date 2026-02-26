@@ -23,7 +23,7 @@ from .default_models import (
     TransformerModel, AttentionLSTM, LSTMModel, GRUModel, RNNModel, CNNModel
 )
 from src.pre_processing.alignment import INDEX_TO_CHAR, CHAR_TO_INDEX, NUM_CLASSES
-from src.pre_processing.augmentation import GIKAugmentations, AugmentedDataset
+from src.pre_processing.augmentation import GIKAugmentationsPerFeature, AugmentedDataset
 
 class GIKModelWrapper(nn.Module):
     """
@@ -182,9 +182,9 @@ class GIKTrainer:
         self.val_dataset = Subset(dataset, range(t, v))
         self.test_dataset = Subset(dataset, range(v, n))
 
-        augment = GIKAugmentations()
+        augment = GIKAugmentationsPerFeature()
         # augmentation boolean as the flag, if false returns the same data, if true then applies augmentation on the fly
-        self.train_dataset_aug = AugmentedDataset(self.train_dataset, augment=augment, use_augmentation=augmentation)   # or False to disable
+        self.train_dataset_aug = AugmentedDataset(self.train_dataset, augment=augment, use_augmentation=augmentation, synthetic_multiplier=5, precompute_synthetic=True, device=self.device)   # or False to disable
         
         self.train_loader = DataLoader(self.train_dataset_aug, batch_size=batch_size, shuffle=True, num_workers=0) # pass in the augmented dataset here for training only
         self.val_loader = DataLoader(self.val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
@@ -298,7 +298,7 @@ class GIKTrainer:
         patience_counter = 0
         
         print(f"Training on {self.device}")
-        print(f"Train: {len(self.train_dataset)}, Val: {len(self.val_dataset)}, Test: {len(self.test_dataset)} (causal split, no shuffle)")
+        print(f"Train: {len(self.train_dataset_aug)}, Val: {len(self.val_dataset)}, Test: {len(self.test_dataset)} (causal split, no shuffle)")
         print("-" * 60)
         
         for epoch in range(epochs):
