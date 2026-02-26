@@ -68,10 +68,13 @@ class AugmentedDataset(Dataset):
         synthetic_multiplier=0,  # ← NEW: copies per base sample
         precompute_synthetic=True,  # ← NEW: build buffer now?
         device=None,
+        regression=False   
     ):
         self.base = base_dataset
         self.augment = augment
         self.use_augmentation = use_augmentation
+        self.regression = regression
+        self.char = None
 
         # Synthetic buffer (stored in memory)
         self.synthetic_samples = []
@@ -83,7 +86,11 @@ class AugmentedDataset(Dataset):
     def _build_synthetic_buffer(self, multiplier, device):
         """Generate multiplier augmented copies per base sample."""
         for idx in range(len(self.base)):
-            x_orig, y = self.base[idx]
+            if self.regression:
+                x_orig, y, self.char = self.base[idx]
+                print(f"Original char key: {self.char}, Original label: {y}")
+            else:
+                x_orig, y = self.base[idx]
             if not torch.is_tensor(x_orig):
                 x_orig = torch.as_tensor(x_orig)
             if device is not None:
@@ -100,11 +107,18 @@ class AugmentedDataset(Dataset):
     def __getitem__(self, idx):
         if idx < len(self.base):
             # Original base sample (with optional online aug)
-            x, y = self.base[idx]
+            if self.regression:
+                x, y, self.char = self.base[idx]
+            else:
+                x, y = self.base[idx]
             if self.use_augmentation and self.augment is not None:
                 x = self.augment(x)
+            if self.regression:
+                return x, y, self.char
             return x, y
         else:
             # Precomputed synthetic sample (no further augmentation)
             syn_idx = idx - len(self.base)
+            if self.regression:
+                return self.synthetic_samples[syn_idx], self.synthetic_labels[syn_idx][0], self.char
             return self.synthetic_samples[syn_idx], self.synthetic_labels[syn_idx]
