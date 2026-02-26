@@ -10,7 +10,8 @@ experiment:
   mode: "classification" # "coordinate" or "classification"
   max_seq_length: 10
   use_dim_reduction: true
-  use_class_weights: false
+  dim_red_method: "pca" # "pca" or "active-imu"
+  dim_red_dims_ratio: 0.4 # used by pca
   run_preprocess: false
   export_dataset_csv: false
 
@@ -35,6 +36,7 @@ train:
 
 modes:
   classification:
+    use_class_weights: false
     output_logits: "NUM_CLASSES"
     is_one_hot: true
     key_mapping_dict: "CHAR_TO_INDEX"
@@ -45,6 +47,7 @@ modes:
       gamma: 2.0
 
   coordinate:
+    use_class_weights: true
     output_logits: 2
     is_one_hot: false
     key_mapping_dict: "FULL_COORDS"
