@@ -20,7 +20,7 @@ from torch.utils.data import Dataset
 
 class GIKAugmentationsPerFeature:
 
-    def __init__(self, gauss_std=0.02,scale_range=(0.8, 1.2),uni_low=-0.02 ,uni_high=0.02): # Not setting these too high 
+    def __init__(self, gauss_std=0.01,scale_range=(0.9, 1.1),uni_low=-0.01 ,uni_high=0.01): # Not setting these too high 
         self.gauss_std = gauss_std
         self.scale_range = scale_range
         self.uni_low = uni_low
@@ -65,8 +65,8 @@ class AugmentedDataset(Dataset):
         base_dataset,
         augment=None,
         use_augmentation=True,
-        synthetic_multiplier=0,  # ← NEW: copies per base sample
-        precompute_synthetic=True,  # ← NEW: build buffer now?
+        synthetic_multiplier=0,
+        precompute_synthetic=False,  # Set False by default!
         device=None,
         regression=False   
     ):
@@ -74,11 +74,11 @@ class AugmentedDataset(Dataset):
         self.augment = augment
         self.use_augmentation = use_augmentation
         self.regression = regression
-        self.char = None
 
         # Synthetic buffer (stored in memory)
         self.synthetic_samples = []
         self.synthetic_labels = []
+        self.synthetic_raw_labels = []  # Fixed typo
 
         if precompute_synthetic and synthetic_multiplier > 0 and augment is not None:
             self._build_synthetic_buffer(synthetic_multiplier, device)
@@ -87,10 +87,10 @@ class AugmentedDataset(Dataset):
         """Generate multiplier augmented copies per base sample."""
         for idx in range(len(self.base)):
             if self.regression:
-                x_orig, y, self.char = self.base[idx]
-                print(f"Original char key: {self.char}, Original label: {y}")
+                x_orig, y, raw_label = self.base[idx]  # ← LOCAL var, not self.char
             else:
                 x_orig, y = self.base[idx]
+            
             if not torch.is_tensor(x_orig):
                 x_orig = torch.as_tensor(x_orig)
             if device is not None:
@@ -99,7 +99,9 @@ class AugmentedDataset(Dataset):
             for _ in range(multiplier):
                 x_aug = self.augment(x_orig)
                 self.synthetic_samples.append(x_aug.clone())
-                self.synthetic_labels.append(y)
+                self.synthetic_labels.append(y)  # y should be scalar/tensor
+                if self.regression:
+                    self.synthetic_raw_labels.append(raw_label)  # ← LOCAL var
 
     def __len__(self):
         return len(self.base) + len(self.synthetic_samples)
@@ -108,17 +110,23 @@ class AugmentedDataset(Dataset):
         if idx < len(self.base):
             # Original base sample (with optional online aug)
             if self.regression:
-                x, y, self.char = self.base[idx]
+                x, y, raw_label = self.base[idx]  # ← LOCAL vars
             else:
                 x, y = self.base[idx]
+            
             if self.use_augmentation and self.augment is not None:
                 x = self.augment(x)
+            
             if self.regression:
-                return x, y, self.char
+                return x, y, raw_label
             return x, y
+        
         else:
             # Precomputed synthetic sample (no further augmentation)
             syn_idx = idx - len(self.base)
             if self.regression:
-                return self.synthetic_samples[syn_idx], self.synthetic_labels[syn_idx][0], self.char
+                return (self.synthetic_samples[syn_idx], 
+                       self.synthetic_labels[syn_idx],  # Fixed: no [0]
+                       self.synthetic_raw_labels[syn_idx])
             return self.synthetic_samples[syn_idx], self.synthetic_labels[syn_idx]
+
