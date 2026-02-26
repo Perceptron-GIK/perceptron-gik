@@ -58,7 +58,6 @@ def filter_imu_data(df: pd.DataFrame) -> pd.DataFrame:
         cols = [f'ax_{part}', f'ay_{part}', f'az_{part}', f'gx_{part}', f'gy_{part}', f'gz_{part}']
         if not all(c in df.columns for c in cols):
             continue
-       
         data = np.column_stack([time_rel, df[cols].values])
         try:
             init_tuple = tracker.initialise(data)
