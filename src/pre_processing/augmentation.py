@@ -80,7 +80,7 @@ class AugmentedDataset(Dataset):
         self.synthetic_labels = []
         self.synthetic_raw_labels = []  # Fixed typo
 
-        if precompute_synthetic and synthetic_multiplier > 0 and augment is not None:
+        if precompute_synthetic and synthetic_multiplier > 0 and use_augmentation and augment is not None:
             self._build_synthetic_buffer(synthetic_multiplier, device)
 
     def _build_synthetic_buffer(self, multiplier, device):
