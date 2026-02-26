@@ -196,9 +196,8 @@ class GIKTrainer:
             self.criterion = loss(**loss_kwargs)
         else:
             self.criterion = nn.CrossEntropyLoss()
-        
+        self.criterion = self.criterion.to(self.device)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
-        
         self.history = {'train_loss': [], 'val_loss': [], 'train_acc': [], 'val_acc': []}
     
     def train_epoch(self) -> Tuple[float, float]:
@@ -206,14 +205,20 @@ class GIKTrainer:
         self.model.train()
         total_loss, correct, total = 0.0, 0, 0
 
-        for batch_x, batch_y in self.train_loader:
+        for data in self.train_loader:
+            batch_x, batch_y, raw_labels = None, None, None
+            if self.regression:
+                batch_x, batch_y, raw_labels = data
+                raw_labels = raw_labels.to(self.device)
+            else:
+                batch_x, batch_y = data
             batch_x = batch_x.to(self.device)
             batch_y = batch_y.to(self.device)
 
             self.optimizer.zero_grad()
             logits = self.model(batch_x)
             if self.regression:
-                loss = self.criterion(logits, batch_y)
+                loss = self.criterion(logits, batch_y, raw_labels)
                 
             else:
                 loss = self.criterion(logits, batch_y.argmax(dim=-1))
@@ -239,13 +244,19 @@ class GIKTrainer:
         self.model.eval()
         total_loss, correct, total = 0.0, 0, 0
 
-        for batch_x, batch_y in self.val_loader:
+        for data in self.val_loader:
+            batch_x, batch_y, raw_labels = None, None, None
+            if self.regression:
+                batch_x, batch_y, raw_labels = data
+                raw_labels = raw_labels.to(self.device)
+            else:
+                batch_x, batch_y = data
             batch_x = batch_x.to(self.device)
             batch_y = batch_y.to(self.device)
 
             logits = self.model(batch_x)
             if self.regression:
-                loss = self.criterion(logits, batch_y)
+                loss = self.criterion(logits, batch_y, raw_labels)
             else:
                 loss = self.criterion(logits, batch_y.argmax(dim=-1))
                 pred = logits.argmax(dim=-1)
@@ -265,11 +276,17 @@ class GIKTrainer:
         self.model.eval()
         total_loss, correct, total = 0.0, 0, 0
         
-        for batch_x, batch_y in self.test_loader:
+        for data in self.test_loader:
+            batch_x, batch_y, raw_labels = None, None, None
+            if self.regression:
+                batch_x, batch_y, raw_labels = data
+                raw_labels = raw_labels.to(self.device)
+            else:
+                batch_x, batch_y = data
             batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
             logits = self.model(batch_x)
             if self.regression:
-                loss = self.criterion(logits, batch_y)
+                loss = self.criterion(logits, batch_y, raw_labels)
             else:
                 loss = self.criterion(logits, batch_y.argmax(dim=-1))
                 correct += (logits.argmax(dim=-1) == batch_y.argmax(dim=-1)).sum().item()
