@@ -8,10 +8,7 @@ GIK Preprocessing Pipeline for Real-Time Inference
 """
 
 import numpy as np
-import pandas as pd
 import os
-import sys
-import json
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
@@ -80,102 +77,27 @@ def preprocess(
     '''
     Preprocess a single window of data and save it to output_path
     '''
+    preprocessor = AlignData(
+        left_data=left_data,
+        right_data=right_data
+    )
 
-# IMU filter is applied to each hand individually, before timestamps are removed
-# Alignment is done assuming timestamps are the last column of each array
-# Therefore IMU filter needs to insert position predictions before the last column of timestamps
-# Alignment doesn't need to save any timestamps
+    samples, metadata = preprocessor.align(
+        max_seq_length=max_seq_length,
+        filter_fn = filter_imu_data if apply_filtering else None
+    )
 
-def preprocess_multiple_sources(
-    data_dir: str,
-    output_path: str,
-    keyboard_files: List[str],
-    left_files: Optional[List[str]] = None,
-    right_files: Optional[List[str]] = None,
-    max_seq_length: int = 100,
-    normalize: bool = True,
-    apply_filtering: bool = True
-) -> Dict[str, Any]:
-    """
-    Preprocess data from multiple source files and combine them.
-    Alignment outputs labels as characters. Labels are saved as characters;
-    mapping to index/vector is done in the Dataset via char_to_index (default CHAR_TO_INDEX).
-    """
-    if len(keyboard_files) == 0:
-        raise ValueError("At least one keyboard file must be provided")
-    
-    if left_files is None:
-        left_files = []
-    if right_files is None:
-        right_files = []
-    
-    # Ensure file lists match in length (or one is empty)
-    has_left = len(left_files) > 0
-    has_right = len(right_files) > 0
-    
-    if has_left and len(left_files) != len(keyboard_files):
-        raise ValueError(f"Number of left files ({len(left_files)}) must match keyboard files ({len(keyboard_files)})")
-    if has_right and len(right_files) != len(keyboard_files):
-        raise ValueError(f"Number of right files ({len(right_files)}) must match keyboard files ({len(keyboard_files)})")
-    
-    print(f"Loading data from {data_dir}...")
-    print(f"  Keyboard files: {keyboard_files}")
-    if has_left:
-        print(f"  Left IMU files: {left_files}")
-    if has_right:
-        print(f"  Right IMU files: {right_files}")
-
-    # fsr columns
-    if has_left and has_right:
+    if left_data is not None and right_data is not None:
         fsr_idx = [12, 19, 26, 33, 40, 71, 78, 85, 92, 99]
     else:
-        fsr_idx = [12, 19, 26, 33, 40]
-    
-    all_samples = []
-    all_labels = []
-    all_prev_labels = []
-    total_skipped = {}
-    
-    # Process each file combination
-    for i in range(len(keyboard_files)):
-        keyboard_file = keyboard_files[i]
-        left_file = left_files[i] if has_left else None
-        right_file = right_files[i] if has_right else None
-        
-        print(f"\nProcessing source {i+1}/{len(keyboard_files)}: {keyboard_file}")
-        
-        preprocessor = Preprocessing(
-            data_dir=data_dir,
-            keyboard_file=keyboard_file,
-            right_file=right_file,
-            left_file=left_file,
-        )
-        
-        samples, labels, prev_labels, metadata = preprocessor.align(
-            max_seq_length=max_seq_length,
-            filter_func=filter_imu_data if apply_filtering else None
-        )
-        
-        all_samples.extend(samples)
-        all_labels.extend(labels)
-        all_prev_labels.extend(prev_labels)
-        
-        # Accumulate skipped chars
-        for char, count in metadata.get('skipped_chars', {}).items():
-            total_skipped[char] = total_skipped.get(char, 0) + count
-        
-        print(f"  Added {len(samples)} samples (total: {len(all_samples)})")
-    
-    if total_skipped:
-        print(f"\nTotal skipped characters: {total_skipped}")
-    
-    print(f"\nProcessing {len(all_samples)} total samples...")
+        fsr_idx = [12, 19, 26, 33, 40]   
 
-    samples_tensor = [torch.tensor(s, dtype=torch.float32) for s in all_samples]
-    if normalize: # Only normalise non-FSR features and non padded samples
+    samples_tensor = torch.tensor(samples, dtype=torch.float32)
+    if normalize:
         F = samples_tensor[0].shape[1]
 
         valid_rows = []
+
         for s in samples_tensor:
             s = torch.nan_to_num(s, nan=0.0, posinf=0.0, neginf=0.0) 
             mask_valid = (s.abs().sum(dim=1) > 0)
@@ -201,58 +123,39 @@ def preprocess_multiple_sources(
             s = torch.nan_to_num(s, nan=0.0, posinf=0.0, neginf=0.0)
             s_norm = s.clone()
             mask_valid = (s.abs().sum(dim=1) > 0)
-            s_norm[mask_valid][:, nonfsr] = (s[mask_valid][:, nonfsr] - mean[nonfsr]) / std[nonfsr] # the forgotten line :o
+            s_norm[mask_valid][:, nonfsr] = (s[mask_valid][:, nonfsr] - mean[nonfsr]) / std[nonfsr]
             s_norm[mask_valid][:, fsr] = s[mask_valid][:, fsr]
             s_norm[~mask_valid] = 0.0
-
             norm_samples.append(s_norm)
-
-        samples_tensor = norm_samples
+        samples_stacked = torch.stack(norm_samples) if norm_samples else torch.tensor([])
     else:
         mean = std = None
-
-    samples_stacked = torch.stack(samples_tensor) if samples_tensor else torch.tensor([])
+        samples_stacked = samples_tensor
 
     combined_metadata = {
-        'num_samples': len(all_samples),
+        'num_samples': samples_stacked.shape[0],
         'num_hands': metadata['num_hands'],
         'has_right': metadata['has_right'],
         'has_left': metadata['has_left'],
         'feat_dim': metadata['feat_dim'],
-        'features_per_hand': metadata['features_per_hand'],
         'max_seq_length': max_seq_length,
-        'skipped_chars': total_skipped,
-        'num_sources': len(keyboard_files),
-        'keyboard_files': keyboard_files,
-        'left_files': left_files if has_left else [],
-        'right_files': right_files if has_right else [],
-        'filter_applied': apply_filtering,
+        'filter_applied': apply_filtering
     }
 
-    save_dict = {
+    dict_to_save = {
         'samples': samples_stacked,
-        'labels': all_labels,
-        'prev_labels': all_prev_labels,
         'mean': mean,
         'std': std,
         'metadata': combined_metadata,
         'normalize': normalize,
-        'max_seq_length': max_seq_length,
+        'max_seq_length': max_seq_length
     }
-    
-    torch.save(save_dict, output_path)
-    
-    json_path = output_path.replace('.pt', '_metadata.json')
-    with open(json_path, 'w') as f:
-        json.dump(combined_metadata, f, indent=2)
-    
-    print(f"\nSaved preprocessed dataset to {output_path}")
-    print(f"Saved metadata to {json_path}")
-    print(f"  - Total samples: {combined_metadata['num_samples']}")
-    print(f"  - Feat dim: {combined_metadata['feat_dim']}")
-    print(f"  - Sources combined: {combined_metadata['num_sources']}")
+
+    torch.save(dict_to_save, output_path)
     
     return combined_metadata
+
+# ================================================================ #
 
 def load_preprocessed_dataset(
     path: str,
