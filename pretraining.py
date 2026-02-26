@@ -37,7 +37,8 @@ import json
 
 # Import custom modules
 from src.imu.main import IMUTracker
-from src.pre_processing.alignment import Preprocessing, CHAR_TO_INDEX
+from src.pre_processing.alignment import Preprocessing
+from src.Constants.char_to_key import CHAR_TO_INDEX
 
 
 IMU_SAMPLING_RATE = 100.0

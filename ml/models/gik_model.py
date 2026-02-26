@@ -22,7 +22,7 @@ from typing import Optional, Tuple, List, Dict, Any
 from .default_models import (
     TransformerModel, AttentionLSTM, LSTMModel, GRUModel, RNNModel, CNNModel
 )
-from src.pre_processing.alignment import INDEX_TO_CHAR, CHAR_TO_INDEX, NUM_CLASSES
+from src.Constants.char_to_key import INDEX_TO_CHAR, NUM_CLASSES
 
 
 class GIKModelWrapper(nn.Module):

@@ -3,7 +3,8 @@ GIK Data Alignment: align IMU sensor data with keyboard events for labeled train
 Outputs samples and labels as characters; mapping (char -> index or vector) is done in the Dataset.
 
 Usage:
-    from src.pre_processing.alignment import Preprocessing, CHAR_TO_INDEX
+    from src.pre_processing.alignment import Preprocessing
+    from src.Constants.char_to_key import CHAR_TO_INDEX
 
     preprocessor = Preprocessing(data_dir="data/", keyboard_file="K.csv", left_file="L.csv", right_file="R.csv")
     samples, labels, prev_labels, metadata = preprocessor.align()
@@ -14,24 +15,7 @@ import os
 import numpy as np
 import pandas as pd
 from typing import Optional, Tuple, List, Dict, Any
-
-# Default vocabulary
-NUM_CLASSES = 40
-SPECIAL_KEY_MAP = {'enter': '\n', 'space': ' ', 'tab': '\t', 'backspace': '\b'}
-
-CHAR_TO_INDEX: Dict[str, int] = {}
-_idx = 0
-for c in 'abcdefghijklmnopqrstuvwxyz':
-    CHAR_TO_INDEX[c] = _idx
-    _idx += 1
-for c in '0123456789':
-    CHAR_TO_INDEX[c] = _idx
-    _idx += 1
-CHAR_TO_INDEX[' '] = _idx
-CHAR_TO_INDEX['\n'] = _idx + 1
-CHAR_TO_INDEX['\b'] = _idx + 2
-CHAR_TO_INDEX['\t'] = _idx + 3
-INDEX_TO_CHAR = {v: k for k, v in CHAR_TO_INDEX.items()}
+from src.Constants.char_to_key import CHAR_TO_INDEX, SPECIAL_KEY_MAP
 
 NON_FEATURE_COLS = {'sample_id', 'time_stamp'}
 
