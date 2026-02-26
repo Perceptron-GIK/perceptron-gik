@@ -94,7 +94,7 @@ class AlignData:
             if filter_fn is not None:
                 self.left.data = filter_fn(self.left.data)
 
-        left_win, right_win = self.left.data, self.right.data
+        left_win, right_win = self.left.data[:, :-1], self.right.data[:, :-1]
 
         if self.has_left and self.has_right:
             left_start, left_end = self.left.data[0, -1], self.left.data[-1, -1]
@@ -109,8 +109,8 @@ class AlignData:
             left_arr = self.left.data[left_mask][:, :-1]
             left_win = left_arr if len(left_arr) > 0 else np.zeros((1, self.left.data.shape[1] - 1))
 
-            right_arr = self.right.data[right_mask]
-            right_win = right_arr if len(right_arr) > 0 else np.zeros((1, self.right.data.shape[1]))
+            right_arr = self.right.data[right_mask][:, :-1]
+            right_win = right_arr if len(right_arr) > 0 else np.zeros((1, self.right.data.shape[1] - 1))
 
         combined = self._combine_hands(
             left=left_win,
