@@ -18,21 +18,14 @@ async def combine_queues(
     while True:
         data_l, t_l = await left_queue.get()
         data_l = np.asarray(data_l, dtype=np.float32)
-        data_l = np.concatenate([data_l, [t_l]])
+        data_l = np.concatenate([data_l[:, 1:], [t_l]]) # Ignore sample ID
 
         data_r, t_r = await right_queue.get()
         data_r = np.asarray(data_r, dtype=np.float32)
-        data_r = np.concatenate([data_r, [t_r]])
+        data_r = np.concatenate([data_r[:, 1:], [t_r]]) # Ignore sample ID
 
         # Check if there is any non-zero FSR data.
-        # If yes, align and preprocess. If not, keep waiting.
-
-        # CALL ALIGNMENT HERE
-
-        combined = np.concatenate([data_l, data_r], axis=-1)
-
-        # Do preprocessing here
-        combined = preprocess(combined)
+        # If yes, call function from inference_preprocessing.py. If not, keep waiting.
 
         await combined_queue.put((combined, min(t_l, t_r)))
 )
