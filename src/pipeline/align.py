@@ -72,8 +72,8 @@ class AlignData:
         if has_l and not has_r:
             return AlignData._pad_to_length(left, max_len)
         return np.concatenate([
-            AlignData._pad_to_length(right, max_len),
             AlignData._pad_to_length(left, max_len),
+            AlignData._pad_to_length(right, max_len)
         ], axis=1)
     
     def align(
@@ -94,7 +94,7 @@ class AlignData:
             if filter_fn is not None:
                 self.left.data = filter_fn(self.left.data)
 
-        left_win, right_win = None, None
+        left_win, right_win = self.left.data, self.right.data
 
         if self.has_left and self.has_right:
             left_start, left_end = self.left.data[0, -1], self.left.data[-1, -1]
@@ -109,8 +109,8 @@ class AlignData:
             left_arr = self.left.data[left_mask][:, :-1]
             left_win = left_arr if len(left_arr) > 0 else np.zeros((1, self.left.data.shape[1] - 1))
 
-            right_arr = self.right.data[right_mask][:, :-1]
-            right_win = right_arr if len(right_arr) > 0 else np.zeros((1, self.right.data.shape[1] - 1))
+            right_arr = self.right.data[right_mask]
+            right_win = right_arr if len(right_arr) > 0 else np.zeros((1, self.right.data.shape[1]))
 
         combined = self._combine_hands(
             left=left_win,
@@ -122,7 +122,7 @@ class AlignData:
             'num_hands': (1 if self.has_right else 0) + (1 if self.has_left else 0),
             'has_left': self.has_left,
             'has_right': self.has_right,
-            'feat_dim': combined.shape[1],
+            'feat_dim': combined.shape[1] - 1,
             'max_seq_length': max_seq_length
         }
 
