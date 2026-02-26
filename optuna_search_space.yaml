@@ -1,0 +1,111 @@
+search_space:
+  experiment.dim_red_method:
+    type: categorical
+    choices: ["pca", "active-imu"]
+
+  experiment.dim_red_dims_ratio:
+    type: float
+    low: 0.2
+    high: 0.8
+    step: 0.1
+    when:
+      dim_red_method: "pca"
+
+  # Core trainer/model params
+  model_type:
+    type: categorical
+    choices: ["lstm", "gru", "attention_lstm", "transformer", "cnn", "rnn"]
+
+  learning_rate:
+    type: float
+    low: 0.0001
+    high: 0.005
+    log: true
+
+  weight_decay:
+    type: float
+    low: 0.000001
+    high: 0.01
+    log: true
+
+  batch_size:
+    type: categorical
+    choices: [16 ,32, 64, 128]
+
+  dropout:
+    type: float
+    low: 0.1
+    high: 0.8
+
+  hidden_dim_inner_model:
+    type: categorical
+    choices: [64, 96, 128, 192, 256]
+
+  hidden_dim_classification_head:
+    type: categorical
+    choices: [64, 128, 256]
+
+  num_layers:
+    type: int
+    low: 1
+    high: 3
+
+  # Inner model params
+  inner_model_prams.dropout:
+    type: float
+    low: 0.1
+    high: 0.8
+    when:
+      model_type: ["lstm", "gru", "attention_lstm", "transformer", "cnn", "rnn"]
+
+  inner_model_prams.num_layers:
+    type: int
+    low: 1
+    high: 5
+    when:
+      model_type: ["lstm", "gru", "attention_lstm", "transformer", "rnn"]
+
+  inner_model_prams.bidirectional:
+    type: categorical
+    choices: [true, false]
+    when:
+      model_type: ["lstm", "gru", "attention_lstm", "rnn"]
+
+  inner_model_prams.num_heads:
+    type: categorical
+    choices: [2, 4, 8, 16, 32]
+    when:
+      model_type: ["transformer", "attention_lstm"]
+
+  inner_model_prams.kernel_sizes:
+    type: categorical
+    choices: [[3, 5, 7], [3, 3, 5], [5, 7, 9], [3, 5]]
+    when:
+      model_type: ["cnn"]
+
+
+  # Coordinate-mode specific loss params
+  loss_params.h_v_ratio:
+    type: float
+    low: 0.2
+    high: 1.6
+    step: 0.1
+    when:
+      mode: "coordinate"
+
+  loss_params.bias:
+    type: float
+    low: 0.0
+    high: 0.8
+    step: 0.05
+    when:
+      mode: "coordinate"
+
+  # Classification-mode specific focal parameter
+  loss_params.gamma:
+    type: float
+    low: 1.0
+    high: 4.0
+    step: 0.5
+    when:
+      mode: "classification"
