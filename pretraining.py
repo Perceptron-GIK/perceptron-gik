@@ -181,15 +181,23 @@ def preprocess_multiple_sources(
             mask_valid = (s.abs().sum(dim=1) > 0)
             if mask_valid.any():
                 valid_rows.append(s[mask_valid])
-
+        
         if valid_rows:
             all_data = torch.cat(valid_rows, dim=0)  
-            mean = all_data.mean(dim=0)           
-            std = all_data.std(dim=0)              
-            std[std == 0] = 1.0
+            # per-feature min, max for non-FSR features
+            x_min = all_data.amin(dim=0)              # [F]
+            x_max = all_data.amax(dim=0)              # [F]
+            mean = all_data.mean(dim=0)                    # [F]        
+            std = all_data.std(dim=0)                      # [F] 
+            print(x_min, x_max)  
+            
+
+            # avoid zero range
+            range_ = x_max - x_min
+            range_[range_ == 0] = 1.0
         else:
-            mean = torch.zeros(F)
-            std = torch.ones(F)
+            x_min = torch.zeros(F)
+            range_ = torch.ones(F)
 
         mask = torch.ones(F, dtype=torch.bool)
         mask[fsr_idx] = False
@@ -201,7 +209,17 @@ def preprocess_multiple_sources(
             s = torch.nan_to_num(s, nan=0.0, posinf=0.0, neginf=0.0)
             s_norm = s.clone()
             mask_valid = (s.abs().sum(dim=1) > 0)
-            s_norm[mask_valid][:, nonfsr] = (s[mask_valid][:, nonfsr] - mean[nonfsr]) / std[nonfsr] # the forgotten line :o
+
+            # map non-FSR features to [-1, 1]
+            # formula: 2 * (x - min)/(max - min) - 1
+            s_norm_valid = s_norm[mask_valid]
+            s_valid = s[mask_valid]
+
+            s_norm_valid[:, nonfsr] = 2.0 * (
+                (s_valid[:, nonfsr] - x_min[nonfsr]) / range_[nonfsr]
+            ) - 1.0
+
+
             s_norm[mask_valid][:, fsr] = s[mask_valid][:, fsr]
             s_norm[~mask_valid] = 0.0
 
