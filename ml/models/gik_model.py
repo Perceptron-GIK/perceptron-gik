@@ -22,7 +22,7 @@ from typing import Optional, Tuple, List, Dict, Any
 from .default_models import (
     TransformerModel, AttentionLSTM, LSTMModel, GRUModel, RNNModel, CNNModel
 )
-from src.pre_processing.alignment import INDEX_TO_CHAR, CHAR_TO_INDEX, NUM_CLASSES
+from src.Constants.char_to_key import INDEX_TO_CHAR, NUM_CLASSES
 
 
 class GIKModelWrapper(nn.Module):
@@ -155,8 +155,12 @@ class GIKTrainer:
         val_ratio: float = 0.1,
         loss: callable = nn.CrossEntropyLoss,
         loss_kwargs: Optional[Dict] = None,
-        
+        regression: bool = False,
     ):
+        """
+        regression: If True, labels are continuous (e.g. 2D coords); loss(logits, batch_y) and accuracy uses L1.
+        """
+        self.regression = regression
         if device is None:
             if torch.cuda.is_available():
                 device = 'cuda'
@@ -177,7 +181,7 @@ class GIKTrainer:
         self.val_dataset = Subset(dataset, range(t, v))
         self.test_dataset = Subset(dataset, range(v, n))
         
-        self.train_loader = DataLoader(self.train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+        self.train_loader = DataLoader(self.train_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
         self.val_loader = DataLoader(self.val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
         self.test_loader = DataLoader(self.test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
         
@@ -187,72 +191,108 @@ class GIKTrainer:
             self.criterion = loss(**loss_kwargs)
         else:
             self.criterion = nn.CrossEntropyLoss()
-        
+        self.criterion = self.criterion.to(self.device)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
-        
         self.history = {'train_loss': [], 'val_loss': [], 'train_acc': [], 'val_acc': []}
     
     def train_epoch(self) -> Tuple[float, float]:
         """Train for one epoch."""
         self.model.train()
-        total_loss = 0
-        correct = 0
-        total = 0
-        
-        for batch_x, batch_y in self.train_loader:
+        total_loss, correct, total = 0.0, 0, 0
+
+        for data in self.train_loader:
+            batch_x, batch_y, raw_labels = None, None, None
+            if self.regression:
+                batch_x, batch_y, raw_labels = data
+                raw_labels = raw_labels.to(self.device)
+            else:
+                batch_x, batch_y = data
             batch_x = batch_x.to(self.device)
             batch_y = batch_y.to(self.device)
-            
+
             self.optimizer.zero_grad()
             logits = self.model(batch_x)
-            loss = self.criterion(logits, batch_y.argmax(dim=-1))
-            
+            if self.regression:
+                loss = self.criterion(logits, batch_y, raw_labels)
+                
+            else:
+                loss = self.criterion(logits, batch_y.argmax(dim=-1))
+                pred = logits.argmax(dim=-1)
+                correct += (pred == batch_y.argmax(dim=-1)).sum().item()
+            total += batch_x.size(0)
+
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self.optimizer.step()
-            
+
             total_loss += loss.item() * batch_x.size(0)
-            pred = logits.argmax(dim=-1)
-            correct += (pred == batch_y.argmax(dim=-1)).sum().item()
-            total += batch_x.size(0)
-        
-        return total_loss / total, correct / total
+
+        if self.regression:
+            acc = None
+        else:
+            acc = correct / total if total else 0.0
+        return total_loss / total if total else 0.0, acc
     
     @torch.no_grad()
     def validate(self) -> Tuple[float, float]:
         """Validate the model."""
         self.model.eval()
-        total_loss = 0
-        correct = 0
-        total = 0
-        
-        for batch_x, batch_y in self.val_loader:
+        total_loss, correct, total = 0.0, 0, 0
+
+        for data in self.val_loader:
+            batch_x, batch_y, raw_labels = None, None, None
+            if self.regression:
+                batch_x, batch_y, raw_labels = data
+                raw_labels = raw_labels.to(self.device)
+            else:
+                batch_x, batch_y = data
             batch_x = batch_x.to(self.device)
             batch_y = batch_y.to(self.device)
-            
+
             logits = self.model(batch_x)
-            loss = self.criterion(logits, batch_y.argmax(dim=-1))
-            
+            if self.regression:
+                loss = self.criterion(logits, batch_y, raw_labels)
+            else:
+                loss = self.criterion(logits, batch_y.argmax(dim=-1))
+                pred = logits.argmax(dim=-1)
+                correct += (pred == batch_y.argmax(dim=-1)).sum().item()
             total_loss += loss.item() * batch_x.size(0)
-            pred = logits.argmax(dim=-1)
-            correct += (pred == batch_y.argmax(dim=-1)).sum().item()
             total += batch_x.size(0)
-        
-        return total_loss / total, correct / total
+
+        if self.regression:
+            acc = None
+        else:
+            acc = correct / total if total else 0.0
+        return total_loss / total if total else 0.0, acc
     
     @torch.no_grad()
     def evaluate_test(self) -> Tuple[float, float]:
         """Evaluate on the held-out test set (causal split)."""
         self.model.eval()
         total_loss, correct, total = 0.0, 0, 0
-        for batch_x, batch_y in self.test_loader:
+        
+        for data in self.test_loader:
+            batch_x, batch_y, raw_labels = None, None, None
+            if self.regression:
+                batch_x, batch_y, raw_labels = data
+                raw_labels = raw_labels.to(self.device)
+            else:
+                batch_x, batch_y = data
             batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
             logits = self.model(batch_x)
-            loss = self.criterion(logits, batch_y.argmax(dim=-1))
+            if self.regression:
+                loss = self.criterion(logits, batch_y, raw_labels)
+            else:
+                loss = self.criterion(logits, batch_y.argmax(dim=-1))
+                correct += (logits.argmax(dim=-1) == batch_y.argmax(dim=-1)).sum().item()
             total_loss += loss.item() * batch_x.size(0)
-            correct += (logits.argmax(dim=-1) == batch_y.argmax(dim=-1)).sum().item()
             total += batch_x.size(0)
-        return (total_loss / total, correct / total) if total else (0.0, 0.0)
+
+        if self.regression:
+            acc = None
+        else:
+            acc = correct / total if total else 0.0
+        return total_loss / total if total else 0.0, acc
     
     def evaluate(self) -> Tuple[float, float]:
         """Alias for validate()."""
@@ -281,12 +321,15 @@ class GIKTrainer:
             
             self.history['train_loss'].append(train_loss)
             self.history['val_loss'].append(val_loss)
-            self.history['train_acc'].append(train_acc)
-            self.history['val_acc'].append(val_acc)
+            if not self.regression:
+                self.history['train_acc'].append(train_acc)
+                self.history['val_acc'].append(val_acc)
             
-            print(f"Epoch {epoch+1:3d}/{epochs} | "
-                  f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | "
-                  f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
+            print(f"Epoch {epoch+1:3d}/{epochs} ")
+            print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} ")
+            
+            if not self.regression:
+                print(f"Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f} ")
             
             if val_loss < best_val_loss:
                 best_val_loss = val_loss

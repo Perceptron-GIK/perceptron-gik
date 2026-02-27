@@ -26,6 +26,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 from typing import Optional, Tuple, List, Dict, Any, Union
+from collections import Counter
 
 # char_to_index in Dataset can map char -> int or char -> tuple (vector)
 LabelType = Union[int, Tuple[Union[int, float], ...], List[Union[int, float]]]
@@ -36,7 +37,8 @@ import json
 
 # Import custom modules
 from src.imu.main import IMUTracker
-from src.pre_processing.alignment import Preprocessing, CHAR_TO_INDEX
+from src.pre_processing.alignment import Preprocessing
+from src.Constants.char_to_key import CHAR_TO_INDEX
 
 
 IMU_SAMPLING_RATE = 100.0
@@ -56,7 +58,6 @@ def filter_imu_data(df: pd.DataFrame) -> pd.DataFrame:
         cols = [f'ax_{part}', f'ay_{part}', f'az_{part}', f'gx_{part}', f'gy_{part}', f'gz_{part}']
         if not all(c in df.columns for c in cols):
             continue
-       
         data = np.column_stack([time_rel, df[cols].values])
         try:
             init_tuple = tracker.initialise(data)
@@ -258,6 +259,7 @@ def load_preprocessed_dataset(
     char_to_index: Optional[Dict[str, LabelType]] = None,
     is_one_hot_labels: bool = False,
     add_prev_char: bool = True,
+    return_class_id: bool = False,
 ) -> 'PreprocessedGIKDataset':
     """
     Load a preprocessed dataset from disk. Labels are stored as characters; char_to_index is applied in the Dataset.
@@ -270,7 +272,7 @@ def load_preprocessed_dataset(
     Returns:
         PreprocessedGIKDataset instance
     """
-    return PreprocessedGIKDataset(path, char_to_index=char_to_index, is_one_hot_labels=is_one_hot_labels, add_prev_char=add_prev_char)
+    return PreprocessedGIKDataset(path, char_to_index=char_to_index, is_one_hot_labels=is_one_hot_labels, add_prev_char=add_prev_char, return_class_id=return_class_id)
 
 def export_dataset_to_csv(
     pt_path: str,
@@ -378,6 +380,28 @@ def export_dataset_to_csv(
         print(f"  {char}: {count}")
     return summary_path
 
+def get_class_weights(pt_path: str) -> torch.Tensor:
+    """Calculates Class Weights for the Processed Dataset
+
+    Args:
+        pt_path (str): Path to the .pt file
+
+    Returns:
+        Dict: Dictionary mapping each character to its weight
+    """
+    data = torch.load(pt_path, weights_only=False)
+    labels = data["labels"]  # list[str]
+
+    counts = Counter(labels)
+    N = sum(counts.values())
+    K = len(CHAR_TO_INDEX)
+
+    w = torch.ones(K, dtype=torch.float32)
+    for ch, idx in CHAR_TO_INDEX.items():
+        n_c = counts.get(ch, 0)
+        w[idx] = (N / (K * n_c)) if n_c > 0 else 1.0  # or keep 1.0 / drop class
+    return w
+
 class PreprocessedGIKDataset(Dataset):
     """
     Loads preprocessed data; labels are stored as characters. char_to_index (default CHAR_TO_INDEX)
@@ -390,6 +414,7 @@ class PreprocessedGIKDataset(Dataset):
         char_to_index: Optional[Dict[str, LabelType]] = None,
         is_one_hot_labels: bool = False,
         add_prev_char: bool = True,
+        return_class_id: bool = False,
     ):
         """
         Args:
@@ -407,19 +432,19 @@ class PreprocessedGIKDataset(Dataset):
         self._char_to_index = dict(char_to_index) if char_to_index is not None else dict(CHAR_TO_INDEX)  # alignment filters by CHAR_TO_INDEX so saved labels are in this vocab
         self.is_one_hot_labels = is_one_hot_labels
 
-        # Infer mode from first mapping value
-        first_val = next(iter(self._char_to_index.values()), None) 
-        self._is_vector = isinstance(first_val, tuple)
-        self._num_classes = max(self._char_to_index.values(), default=-1) + 1
+        # Infer mode from first mapping value: int -> index mode, tuple/list -> vector mode
+        first_val = next(iter(self._char_to_index.values()), None)
+        self._is_vector = isinstance(first_val, (tuple, list))
         if self._is_vector:
             self._label_dim = len(first_val)
-
+            self._num_classes = None
         else:
-            self._label_dim = 1
+            self._label_dim = None
+            self._num_classes = max(self._char_to_index.values(), default=-1) + 1
 
         self.add_prev_char = add_prev_char
         if self.add_prev_char:
-            self._input_dim = feat_dim + (self._num_classes if self.is_one_hot_labels else self._label_dim)
+            self._input_dim = feat_dim + (self._label_dim if self._is_vector else self._num_classes) # one-hot is implicitly assumed for direct classification
         else: 
             self._input_dim = feat_dim
         self.mean = data['mean']
@@ -427,6 +452,7 @@ class PreprocessedGIKDataset(Dataset):
         self.metadata = meta
         self.normalize = data['normalize']
         self.max_seq_length = data['max_seq_length']
+        self.return_class_id = return_class_id
 
     @property
     def input_dim(self) -> int:
@@ -468,4 +494,8 @@ class PreprocessedGIKDataset(Dataset):
             label = F.one_hot(torch.tensor(rep, dtype=torch.long), self._num_classes).float()
         else:
             label = torch.tensor(rep, dtype=torch.long)
-        return sample, label
+        
+        if self.return_class_id:
+            return sample, label, CHAR_TO_INDEX[char]
+        else:
+            return sample, label
