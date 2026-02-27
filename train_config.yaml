@@ -1,0 +1,56 @@
+data:
+  data_dir: "data_jun_3"
+  keyboard_files:
+    - "Keyboard_13.csv"
+  left_files:
+    - "Left_13.csv"
+  right_files: null
+
+experiment:
+  mode: "classification" # "coordinate" or "classification"
+  max_seq_length: 10
+  use_dim_reduction: true
+  use_class_weights: false
+  run_preprocess: false
+  export_dataset_csv: false
+
+model:
+  model_type: "attention_lstm"
+  hidden_dim_inner_model: 128
+  hidden_dim_classification_head: 128
+  num_layers: 2
+  dropout: 0.5
+  inner_model_prams:
+    bidirectional: true
+    dropout: 0.5
+    num_layers: 2
+    num_heads: 16
+
+train:
+  batch_size: 64
+  learning_rate: 0.0005
+  weight_decay: 0.001
+  epochs: 300
+  early_stopping: 40
+
+modes:
+  classification:
+    output_logits: "NUM_CLASSES"
+    is_one_hot: true
+    key_mapping_dict: "CHAR_TO_INDEX"
+    return_class_id: false
+    regression: false
+    loss: "FocalLoss"
+    loss_params:
+      gamma: 2.0
+
+  coordinate:
+    output_logits: 2
+    is_one_hot: false
+    key_mapping_dict: "FULL_COORDS"
+    return_class_id: true
+    regression: true
+    loss: "CoordinateLossClassification"
+    loss_params:
+      h_v_ratio: 0.5
+      bias: 0.3

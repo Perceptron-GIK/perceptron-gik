@@ -12,7 +12,10 @@ class FocalLoss(nn.Module):
     def __init__(self, gamma: float = 2.0, alpha: Optional[torch.Tensor] = None):
         super().__init__()
         self.gamma = gamma
-        self.alpha = alpha
+        if alpha is None:
+            self.alpha = None
+        else:
+            self.register_buffer("alpha", alpha.float())
     
     def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         ce_loss = F.cross_entropy(inputs, targets, weight=self.alpha, reduction='none')
@@ -33,10 +36,45 @@ class CoordinateLoss(nn.Module):
         """
         super().__init__()
         self.ratio = h_v_ratio
+        self.sigmoid = nn.Sigmoid()
+        self.relu = nn.ReLU()
     
     def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        loss = F.mse_loss(inputs, targets, reduction="none") # reduction prevents aggregation of the last axis
+        x = self.relu(inputs)
+        loss = F.mse_loss(x, targets, reduction="none") # reduction prevents aggregation of the last axis
         weights = loss.new_tensor([self.ratio, 1]) # first logit is horizontal
         weighted_loss = weights * loss
         
         return weighted_loss.mean()
+    
+    
+class CoordinateLossClassification(nn.Module):
+    def __init__(self, h_v_ratio, bias, class_weights):
+        """Params for the Coordinate Loss that takes two continuous logits as inputs and measurers their coordinate differences to the target
+
+        Args:
+            h_v_ratio (float): ratio of the weights given to horizontal correctness vs vertical correctness. 
+            i.e, 1.5 means horizontal correctness matters 1.5 times more than vertical correctness
+        """
+        super().__init__()
+        self.sigmoid = nn.Sigmoid()
+        self.ratio = h_v_ratio
+        self.relu = nn.ReLU()
+        self.bias = bias
+        # These have to have tuples (x,y) as indices
+        self.register_buffer("class_weights", class_weights.float())
+    
+    def forward(self, inputs, targets, class_id):
+        x = self.sigmoid(inputs)
+        scale = inputs.new_tensor([9.0, 4.0])
+        x = x * scale
+
+        diff = x - targets                          # [B, 2]
+        diff = self.relu(diff.abs() - self.bias)    # Dead-zoning
+        weights = inputs.new_tensor([self.ratio, 1.0])
+        weighted_diff = weights * diff              # [B, 2]
+        dist = torch.norm(weighted_diff, dim=1)     # [B] — per-sample scaled euclidean distance
+        
+        # fixing class imbalance with scaled gradient updates
+        w = self.class_weights[class_id.squeeze(-1)] 
+        return (dist * w).mean() # scalar
