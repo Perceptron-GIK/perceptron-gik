@@ -106,12 +106,16 @@ def preprocess(
 
         if valid_rows:
             all_data = torch.cat(valid_rows, dim=0)  
-            mean = all_data.mean(dim=0)           
-            std = all_data.std(dim=0)              
-            std[std == 0] = 1.0
+            x_min = all_data.amin(dim=0) # (F, )
+            x_max = all_data.amax(dim=0) # (F, )
+            mean = all_data.mean(dim=0) # (F, )      
+            std = all_data.std(dim=0) # (F, )
+
+            range_ = x_max - x_min
+            range_[range_ == 0] = 1.0
         else:
-            mean = torch.zeros(F)
-            std = torch.ones(F)
+            x_min = torch.zeros(F)
+            range_ = torch.ones(F)
 
         mask = torch.ones(F, dtype=torch.bool)
         mask[fsr_idx] = False
@@ -123,9 +127,12 @@ def preprocess(
             s = torch.nan_to_num(s, nan=0.0, posinf=0.0, neginf=0.0)
             s_norm = s.clone()
             mask_valid = (s.abs().sum(dim=1) > 0)
-            s_norm[mask_valid][:, nonfsr] = (s[mask_valid][:, nonfsr] - mean[nonfsr]) / std[nonfsr]
-            s_norm[mask_valid][:, fsr] = s[mask_valid][:, fsr]
-            s_norm[~mask_valid] = 0.0
+            valid_idx = mask_valid.nonzero(as_tuple=True)[0]
+            if len(valid_idx) > 0:
+                s_norm[valid_idx[:, None], nonfsr] = 2.0 * (
+                    (s[valid_idx[:, None], nonfsr] - x_min[nonfsr]) / range_[nonfsr]
+                ) - 1.0
+                s_norm[valid_idx[:, None], fsr] = s[valid_idx[:, None], fsr]
             norm_samples.append(s_norm)
         samples_stacked = torch.stack(norm_samples) if norm_samples else torch.tensor([])
     else:
