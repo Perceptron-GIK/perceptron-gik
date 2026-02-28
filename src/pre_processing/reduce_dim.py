@@ -2,48 +2,52 @@ import torch
 from typing import Dict, Optional
 
 def reduce_dim(
-        data_dir: str,
+        data_source,
         method: str,
         has_left: bool,
         has_right: bool,
-        normalise: bool,
-        output_path: str,
+        normalize: bool,
+        output_path: Optional[str] = None,
         dims_ratio: Optional[float] = None
 ) -> Dict[str, int]:
     """
     Applies dimensionality reduction to the preprocessed dataset
 
     Args:
-        data_dir: Directory containing preprocessed dataset
+        data_source: Either the directory containing preprocessed dataset or a PyTorch tensor
         method: Method of dimensionality reduction (helper function must be defined below)
         has_left: Whether data from left hand is present
         has_right: Whether data from right hand is present
-        normalise: Whether to normalise features
-        output_path: Path of output file generated from dimensionality reduction
-        dims_ratio: Proportion of dimensions to keep for PCA
+        normalize: Whether to normalise features
+        output_path: Path of output file generated from dimensionality reduction (if applicable)
+        dims_ratio: Proportion of dimensions to keep (for PCA only)
 
     Returns:
-        dims dictionary with feature dimension before and after dimensionality reduction
+        If reading data from a PyTorch file:
+            dims dictionary with feature dimension before and after dimensionality reduction
+        Else:
+            PyTorch tensor containing data after dimensionality reduction
+            Retained dimensions (for PCA only)
     """
 
+    if isinstance(data_source, str):
+        data = torch.load(data_source)
+    else:
+        data = data_source
+
     if method == "active-imu":
-        dim_bef, dim_aft = active_imu_only(data_dir, has_left, has_right, normalise, output_path)
+        return active_imu_only(data, has_left, has_right, normalize, output_path)
     elif method == "pca":
-        dim_bef, dim_aft = pca(data_dir, dims_ratio, output_path)
+        return pca(data, dims_ratio, output_path)
     else:
         raise Exception("Invalid dimensionality reduction method.")
 
-    dims = {
-        "dim_bef": dim_bef,
-        "dim_aft": dim_aft
-    }
-
-    return dims
-
 # Reduces feature dimension by keeping only data from the active and base IMUs
-def active_imu_only(data_dir, has_left, has_right, normalise, output_path):
-    data = torch.load(data_dir)
-    samples = data["samples"]
+def active_imu_only(data, has_left, has_right, normalize, output_path):
+    if isinstance(data, dict):
+        samples = data["samples"]
+    else:
+        samples = data
     
     if has_left and has_right:
         fsr_indices = torch.tensor([12, 19, 26, 33, 40, 71, 78, 85, 92, 99])
@@ -88,10 +92,14 @@ def active_imu_only(data_dir, has_left, has_right, normalise, output_path):
     pos_data = torch.gather(samples, dim=2, index=pos_indices) # (W, R, nHands*3)
     output = torch.cat([output, pos_data], dim=2)
 
-    dims_aft = output.shape[2]
+    dim_aft = output.shape[2]
+    dims = {
+        "dim_bef": C,
+        "dim_aft": dim_aft
+    }
 
     # Normalisation
-    if normalise:
+    if normalize:
         samples_tensor = [w for w in output] # List of 2D tensors
         F = samples_tensor[0].shape[1]
         valid_rows = []
@@ -136,37 +144,43 @@ def active_imu_only(data_dir, has_left, has_right, normalise, output_path):
     else:
         mean = std = None
 
-    # Update .pt file
-    data["samples"] = output
-    data["metadata"]["feat_dim"] = output.shape[2]
-    data["normalize"] = normalise
-    data["mean"] = mean
-    data["std"] = std
-    torch.save(data, output_path)
+    if isinstance(data, dict):
+        data["samples"] = output
+        data["metadata"]["feat_dim"] = output.shape[2]
+        data["normalize"] = normalize
+        data["mean"] = mean
+        data["std"] = std
+        torch.save(data, output_path)
+        return dims
+    else:
+        return output
 
-    # Return feature dimension before and after dimensionality reduction
-    return C, dims_aft
-
-def pca(data_dir, dims_ratio, output_path):
-    data = torch.load(data_dir)
-    samples = data["samples"]
+def pca(data, dims_ratio, output_path):
+    if isinstance(data, dict):
+        samples = data["samples"]
+    else:
+        samples = data
 
     W, R, C = samples.shape # (nWindows, nRows, nCols)
 
-    dims_bef = C
-    dims_aft = int(dims_bef*dims_ratio)
+    dim_bef = C
+    dim_aft = int(dim_bef*dims_ratio)
+    dims = {
+        "dim_bef": dim_bef,
+        "dim_aft": dim_aft
+    }
 
     # PCA
     all_samples = torch.cat([w for w in samples], dim=0)
     U, S, V = torch.svd(all_samples)
-    output = torch.matmul(all_samples, V[:, :dims_aft])
-    output = output.reshape(W, R, dims_aft)
+    output = torch.matmul(all_samples, V[:, :dim_aft])
+    output = output.reshape(W, R, dim_aft)
 
-    # Update .pt file
-    data["samples"] = output
-    data["metadata"]["feat_dim"] = dims_aft
-    data["normalize"] = False # Avoid normalising again downstream  
-    torch.save(data, output_path)
-
-    # Return feature dimension before and after dimensionality reduction
-    return dims_bef, dims_aft
+    if isinstance(data, dict):
+        data["samples"] = output
+        data["metadata"]["feat_dim"] = dim_aft
+        data["normalize"] = False # Avoid normalising again downstream  
+        torch.save(data, output_path)
+        return dims
+    else:
+        return output
