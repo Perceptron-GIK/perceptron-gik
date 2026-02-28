@@ -71,10 +71,10 @@ class AlignData:
             return AlignData._pad_to_length(right, max_len)
         if has_l and not has_r:
             return AlignData._pad_to_length(left, max_len)
-        return np.concatenate([
+        return np.expand_dims(np.concatenate([
             AlignData._pad_to_length(left, max_len),
             AlignData._pad_to_length(right, max_len)
-        ], axis=1)
+        ], axis=1), axis=0) # (1, nSamples, nFeatures)
     
     def align(
         self,
