@@ -2,8 +2,8 @@
 GIK Preprocessing Pipeline for Real-Time Inference
 
 1. IMU signal filtering (using src/imu/main.py)
-2. Data alignment between left and right IMU sensors/FSRs (using src/pipeline/align.py)
-3. Dataset creation and export for inference
+2. Data alignment between left and right IMU sensors/FSRs (using src/inference/align.py)
+3. Dimensionality reduction (using src/pre_processing/reduce_dim.py)
 
 """
 
@@ -17,6 +17,7 @@ from typing import Optional, Tuple, List, Dict, Any, Union
 # Custom imports
 from src.imu.main import IMUTracker
 from src.inference.align import AlignData
+from src.pre_processing.reduce_dim import reduce_dim
 
 IMU_SAMPLING_RATE = 100.0
 IMU_COLS = [0, 6, 13, 20, 27, 34]
@@ -67,15 +68,31 @@ def filter_imu_data(data: np.ndarray) -> np.ndarray:
     return filtered_data
 
 def preprocess(
-    output_path: str,
     left_data: Optional[np.ndarray] = None,
     right_data: Optional[np.ndarray] = None,
     max_seq_length: int=100,
     normalize: bool=True,
-    apply_filtering: bool=True
+    apply_filtering: bool=True,
+    reduce_dim: bool=True,
+    dim_red_method: Optional[str]="pca",
+    dims_ratio: Optional[float]=0.4,
+    root_dir: Optional[str]=None
 ):
     '''
-    Preprocess a single window of data and save it to output_path
+    Preprocess a single window of data
+
+    Args:
+        left_data: Array of data from the left hand
+        right_data: Array of data from the right hand
+        max_seq_length: Window length for data alignment
+        normalize: Whether to normalise the data
+        apply_filtering: Whether to filter IMU data
+        reduce_dim: Whether to apply dimensionality reduction
+        dim_red_method: Method of dimensionality reduction (if applicable)
+        dims_ratio: Proportion of dimensions to keep (for PCA only)
+    
+    Returns:
+        A single PyTorch tensor of processed data from both hands
     '''
     preprocessor = AlignData(
         left_data=left_data,
@@ -108,9 +125,6 @@ def preprocess(
             all_data = torch.cat(valid_rows, dim=0)  
             x_min = all_data.amin(dim=0) # (F, )
             x_max = all_data.amax(dim=0) # (F, )
-            mean = all_data.mean(dim=0) # (F, )      
-            std = all_data.std(dim=0) # (F, )
-
             range_ = x_max - x_min
             range_[range_ == 0] = 1.0
         else:
@@ -135,33 +149,22 @@ def preprocess(
                 s_norm[valid_idx[:, None], fsr] = s[valid_idx[:, None], fsr]
             norm_samples.append(s_norm)
         samples_tensor = norm_samples
+    
+    samples = torch.stack(samples_tensor) # 3D tensor
+
+    if reduce_dim:
+        output = reduce_dim(
+            data_source=samples,
+            method=dim_red_method,
+            has_left=metadata["has_left"],
+            has_right=metadata["has_right"],
+            normalize=normalize,
+            dims_ratio=dims_ratio,
+            root_dir=root_dir
+        )
+        return output
     else:
-        mean = std = None
-    
-    samples_stacked = torch.stack(samples_tensor) # 3D tensor
-
-    combined_metadata = {
-        'num_samples': samples_stacked.shape[1],
-        'num_hands': metadata['num_hands'],
-        'has_right': metadata['has_right'],
-        'has_left': metadata['has_left'],
-        'feat_dim': metadata['feat_dim'],
-        'max_seq_length': max_seq_length,
-        'filter_applied': apply_filtering
-    }
-
-    dict_to_save = {
-        'samples': samples_stacked,
-        'mean': mean,
-        'std': std,
-        'metadata': combined_metadata,
-        'normalize': normalize,
-        'max_seq_length': max_seq_length
-    }
-
-    torch.save(dict_to_save, output_path)
-    
-    return combined_metadata
+        return samples
 
 # ================================================================ #
 
