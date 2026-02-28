@@ -88,14 +88,53 @@ def active_imu_only(data_dir, has_left, has_right, normalise, output_path):
     pos_data = torch.gather(samples, dim=2, index=pos_indices) # (W, R, nHands*3)
     output = torch.cat([output, pos_data], dim=2)
 
+    dims_aft = output.shape[2]
+
     # Normalisation
-    mean, std = None, None
     if normalise:
-        all_data = torch.cat([w for w in output], dim=0)
-        mean = all_data.men(dim=0)
-        std = all_data.std(dim=0)
-        std[std == 0] = 1.0
-    output = (output - mean) / std
+        samples_tensor = [w for w in output] # List of 2D tensors
+        F = samples_tensor[0].shape[1]
+        valid_rows = []
+
+        for s in samples_tensor:
+            s = torch.nan_to_num(s, nan=0.0, posinf=0.0, neginf=0.0) 
+            mask_valid = (s.abs().sum(dim=1) > 0)
+            if mask_valid.any():
+                valid_rows.append(s[mask_valid])
+
+        if valid_rows:
+            all_data = torch.cat(valid_rows, dim=0)  
+            x_min = all_data.amin(dim=0) # (F, )
+            x_max = all_data.amax(dim=0) # (F, )
+            mean = all_data.mean(dim=0) # (F, )      
+            std = all_data.std(dim=0) # (F, )
+
+            range_ = x_max - x_min
+            range_[range_ == 0] = 1.0
+        else:
+            x_min = torch.zeros(F)
+            range_ = torch.ones(F)
+
+        mask = torch.ones(F, dtype=torch.bool)
+        mask[0] = False
+        nonfsr = mask
+        fsr = ~mask
+
+        norm_samples = []
+        for s in samples_tensor:
+            s = torch.nan_to_num(s, nan=0.0, posinf=0.0, neginf=0.0)
+            s_norm = s.clone()
+            mask_valid = (s.abs().sum(dim=1) > 0)
+            valid_idx = mask_valid.nonzero(as_tuple=True)[0]
+            if len(valid_idx) > 0:
+                s_norm[valid_idx[:, None], nonfsr] = 2.0 * (
+                    (s[valid_idx[:, None], nonfsr] - x_min[nonfsr]) / range_[nonfsr]
+                ) - 1.0
+                s_norm[valid_idx[:, None], fsr] = s[valid_idx[:, None], fsr]
+            norm_samples.append(s_norm)
+        output = torch.stack(norm_samples)
+    else:
+        mean = std = None
 
     # Update .pt file
     data["samples"] = output
@@ -106,7 +145,7 @@ def active_imu_only(data_dir, has_left, has_right, normalise, output_path):
     torch.save(data, output_path)
 
     # Return feature dimension before and after dimensionality reduction
-    return C, output.shape[2]
+    return C, dims_aft
 
 def pca(data_dir, dims_ratio, output_path):
     data = torch.load(data_dir)
