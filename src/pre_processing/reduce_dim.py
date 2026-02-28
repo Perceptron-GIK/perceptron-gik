@@ -1,4 +1,5 @@
 import torch
+import os
 from typing import Dict, Optional
 
 def reduce_dim(
@@ -8,7 +9,8 @@ def reduce_dim(
         has_right: bool,
         normalize: bool,
         output_path: Optional[str] = None,
-        dims_ratio: Optional[float] = None
+        dims_ratio: Optional[float] = None,
+        root_dir: Optional[str] = None
 ) -> Dict[str, int]:
     """
     Applies dimensionality reduction to the preprocessed dataset
@@ -19,15 +21,16 @@ def reduce_dim(
         has_left: Whether data from left hand is present
         has_right: Whether data from right hand is present
         normalize: Whether to normalise features
-        output_path: Path of output file generated from dimensionality reduction (if applicable)
+        output_path: Path of output file generated from dimensionality reduction (during training only)
         dims_ratio: Proportion of dimensions to keep (for PCA only)
+        root_dir: Project root (for PCA only)
 
-    Returns:
-        If reading data from a PyTorch file:
-            dims dictionary with feature dimension before and after dimensionality reduction
-        Else:
-            PyTorch tensor containing data after dimensionality reduction
-            Retained dimensions (for PCA only)
+    If reading data from a PyTorch file:
+        Returns: dims dictionary with feature dimension before and after dimensionality reduction
+        Post-DR dataset is saved to output_path
+        PCA params is saved to root_dir (if applicable)
+    Else:
+        Returns: Post-DR dataset as a PyTorch tensor
     """
 
     if isinstance(data_source, str):
@@ -38,7 +41,7 @@ def reduce_dim(
     if method == "active-imu":
         return active_imu_only(data, has_left, has_right, normalize, output_path)
     elif method == "pca":
-        return pca(data, dims_ratio, output_path)
+        return pca(data, dims_ratio, output_path, root_dir)
     else:
         raise Exception("Invalid dimensionality reduction method.")
 
@@ -155,32 +158,51 @@ def active_imu_only(data, has_left, has_right, normalize, output_path):
     else:
         return output
 
-def pca(data, dims_ratio, output_path):
+def pca(data, dims_ratio, output_path, root_dir):
     if isinstance(data, dict):
         samples = data["samples"]
-    else:
-        samples = data
 
-    W, R, C = samples.shape # (nWindows, nRows, nCols)
+        W, R, C = samples.shape # (nWindows, nRows, nCols)
 
-    dim_bef = C
-    dim_aft = int(dim_bef*dims_ratio)
-    dims = {
-        "dim_bef": dim_bef,
-        "dim_aft": dim_aft
-    }
+        dim_bef = C
+        dim_aft = int(dim_bef*dims_ratio)
+        dims = {
+            "dim_bef": dim_bef,
+            "dim_aft": dim_aft
+        }
 
-    # PCA
-    all_samples = torch.cat([w for w in samples], dim=0)
-    U, S, V = torch.svd(all_samples)
-    output = torch.matmul(all_samples, V[:, :dim_aft])
-    output = output.reshape(W, R, dim_aft)
+        all_samples = torch.cat([w for w in samples], dim=0)
+        mean = all_samples.mean(dim=0, keepdim=True)
+        U, S, V = torch.svd(all_samples)
+        components = V[:, :dim_aft]
 
-    if isinstance(data, dict):
+        pca_params = {
+            "mean": mean,
+            "components": components
+        }
+        torch.save(pca_params, os.path.join(root_dir, "pca_params.pt"))
+
+        output = torch.matmul(all_samples, components)
+        output = output.reshape(W, R, dim_aft)
+
         data["samples"] = output
         data["metadata"]["feat_dim"] = dim_aft
         data["normalize"] = False # Avoid normalising again downstream  
         torch.save(data, output_path)
         return dims
     else:
-        return output
+        W, R, C = data.shape
+        samples = torch.cat([w for w in data], dim=0)
+
+        params_path = os.path.join(root_dir, "pca_params.pt")
+        if not os.path.exists(params_path):
+            raise FileNotFoundError("PCA parameters file not found in root directory.")
+        
+        pca_params = torch.load(os.path.join(root_dir, "pca_params.pt"))
+        mean = pca_params["mean"]
+        components = pca_params["components"]
+        samples_centered = samples - mean
+        output = torch.matmul(samples_centered, components)
+
+        return output.reshape(W, R, components.shape[1])   
+    
