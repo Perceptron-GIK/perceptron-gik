@@ -92,7 +92,7 @@ def preprocess(
     else:
         fsr_idx = [12, 19, 26, 33, 40]   
 
-    samples_tensor = torch.tensor(samples, dtype=torch.float32)
+    samples_tensor = [w for w in torch.tensor(samples, dtype=torch.float32)] # List of tensors
     if normalize:
         F = samples_tensor[0].shape[1]
 
@@ -134,13 +134,14 @@ def preprocess(
                 ) - 1.0
                 s_norm[valid_idx[:, None], fsr] = s[valid_idx[:, None], fsr]
             norm_samples.append(s_norm)
-        samples_stacked = torch.stack(norm_samples) if norm_samples else torch.tensor([])
+        samples_tensor = norm_samples
     else:
         mean = std = None
-        samples_stacked = samples_tensor
+    
+    samples_stacked = torch.stack(samples_tensor) # 3D tensor
 
     combined_metadata = {
-        'num_samples': samples_stacked.shape[0],
+        'num_samples': samples_stacked.shape[1],
         'num_hands': metadata['num_hands'],
         'has_right': metadata['has_right'],
         'has_left': metadata['has_left'],
