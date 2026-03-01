@@ -70,7 +70,7 @@ def preprocess(
     max_seq_length: int=100,
     normalize: bool=True,
     apply_filtering: bool=True,
-    reduce_dim: bool=True,
+    apply_dim_reduction: bool=True,
     dim_red_method: Optional[str]="pca",
     dims_ratio: Optional[float]=0.4,
     root_dir: Optional[str]=None
@@ -84,7 +84,7 @@ def preprocess(
         max_seq_length: Window length for data alignment
         normalize: Whether to normalise the data
         apply_filtering: Whether to filter IMU data
-        reduce_dim: Whether to apply dimensionality reduction
+        apply_dim_reduction: Whether to apply dimensionality reduction
         dim_red_method: Method of dimensionality reduction (if applicable)
         dims_ratio: Proportion of dimensions to keep (for PCA only)
     
@@ -149,7 +149,7 @@ def preprocess(
     
     samples = torch.stack(samples_tensor) # 3D tensor
 
-    if reduce_dim:
+    if apply_dim_reduction:
         output = reduce_dim(
             data_source=samples,
             method=dim_red_method,
