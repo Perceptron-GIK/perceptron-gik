@@ -68,9 +68,9 @@ class AlignData:
         if not has_r and not has_l:
             return None
         if has_r and not has_l:
-            return AlignData._pad_to_length(right, max_len)
+            return np.expand_dims(AlignData._pad_to_length(right, max_len), axis=0)
         if has_l and not has_r:
-            return AlignData._pad_to_length(left, max_len)
+            return np.expand_dims(AlignData._pad_to_length(left, max_len), axis=0)
         return np.expand_dims(np.concatenate([
             AlignData._pad_to_length(left, max_len),
             AlignData._pad_to_length(right, max_len)
@@ -94,7 +94,8 @@ class AlignData:
             if filter_fn is not None:
                 self.left.data = filter_fn(self.left.data)
 
-        left_win, right_win = self.left.data[:, :-1], self.right.data[:, :-1]
+        left_win = self.left.data[:, :-1] if self.has_left else None
+        right_win = self.right.data[:, :-1] if self.has_right else None
 
         if self.has_left and self.has_right:
             left_start, left_end = self.left.data[0, -1], self.left.data[-1, -1]
