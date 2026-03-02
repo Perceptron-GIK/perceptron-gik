@@ -4,13 +4,14 @@ GIK Preprocessing Pipeline for Real-Time Inference
 1. IMU signal filtering (using src/imu/main.py)
 2. Data alignment between left and right IMU sensors/FSRs (using src/inference/align.py)
 3. Dimensionality reduction (using src/pre_processing/reduce_dim.py)
+4. Expansion of data window with previous character prediction as a feature
 
 """
 
 import numpy as np
 import torch
 import torch.nn.functional as F
-from typing import Optional
+from typing import Optional, Any
 
 # Custom imports
 from src.imu.main import IMUTracker
@@ -68,9 +69,28 @@ def filter_imu_data(data: np.ndarray) -> np.ndarray:
 
     return filtered_data
 
+def add_prev_char(data, prev_char):
+    '''
+    Adds the previous character prediction to the current window of data
+
+    Args:
+        data: 3D PyTorch tensor containing a single window of preprocessed data
+        prev_char: Index of the previous character prediction
+
+    Returns:
+        Data with prev_char added as a feature
+    '''
+    if not prev_char:
+        return F.pad(data, (0, 40))
+    else:
+        nRows = data.shape[1]
+        prev_char_onehot = torch.from_numpy(CHARIDX_TO_ONEHOT[[prev_char]]).float().unsqueeze(1).repeat(1, nRows, 1)
+        return torch.cat((data, prev_char_onehot), dim=2)
+
 def preprocess(
     left_data: Optional[np.ndarray] = None,
     right_data: Optional[np.ndarray] = None,
+    prev_char: Any=None,
     max_seq_length: int=100,
     normalize: bool=True,
     apply_filtering: bool=True,
@@ -85,6 +105,7 @@ def preprocess(
     Args:
         left_data: Array of data from the left hand
         right_data: Array of data from the right hand
+        prev_char: Index of previous character prediction
         max_seq_length: Window length for data alignment
         normalize: Whether to normalise the data
         apply_filtering: Whether to filter IMU data
@@ -163,24 +184,6 @@ def preprocess(
             dims_ratio=dims_ratio,
             root_dir=root_dir
         )
-        return output
+        return add_prev_char(output, prev_char)
     else:
-        return samples
-
-def add_prev_char(data, prev_char):
-    '''
-    Adds the previous character prediction to the current window of data
-
-    Args:
-        data: 3D PyTorch tensor containing a single window of preprocessed data
-        prev_char: Index of the previous character prediction
-
-    Returns:
-        Data with prev_char added as a feature
-    '''
-    if not prev_char:
-        return F.pad(data, (0, 40))
-    else:
-        nRows = data.shape[1]
-        prev_char_onehot = torch.from_numpy(CHARIDX_TO_ONEHOT[[prev_char]]).float().unsqueeze(1).repeat(1, nRows, 1)
-        return torch.cat((data, prev_char_onehot), dim=2)
+        return add_prev_char(samples, prev_char)
