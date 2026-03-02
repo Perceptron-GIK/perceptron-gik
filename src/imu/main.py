@@ -105,7 +105,7 @@ class IMUTracker:
 
             pred_a = normalise(-rotate(q) @ grv) # Predicted acceleration
             with np.errstate(divide='ignore'):
-                    Ra = [(acc_noise/np.linalg.norm(at))**2 + (1 - grm/np.linalg.norm(at))**2]*3 # Accelerometer noise
+                Ra = [(acc_noise/np.linalg.norm(at))**2 + (1 - grm/np.linalg.norm(at))**2]*3 # Accelerometer noise
 
             if self.use_mag and m is not None:
                 pred_m = normalise(-rotate(q) @ magv) # Predicted magnetic field
@@ -189,7 +189,8 @@ class IMUTracker:
                 break
         
         drift = a_world[t_end:].mean(axis=0)
-        drift_rate = drift/(t_end - t_start) # Assuming drift accumulates linearly
+        with np.errstate(divide='ignore'):
+            drift_rate = drift/(t_end - t_start) # Assuming drift accumulates linearly
 
         # Remove drift during period of motion
         for i in range(t_end - t_start):
