@@ -205,7 +205,7 @@ async def process_queues(left_queue, right_queue):
 ## ================================================== ##
 
 async def main():
-    print(f"Waiting for GIK to appear...")
+    print(f"Waiting for GIK to appear...", flush=True)
 
     data_queue_left = asyncio.Queue(MAX_QUEUE_SIZE)
     data_queue_right = asyncio.Queue(MAX_QUEUE_SIZE)
@@ -215,3 +215,10 @@ async def main():
                          process_queues(data_queue_left, data_queue_right))
 
 asyncio.run(main())
+
+## ================================================== ##
+# ISSUES/TO-DO
+# * Need to check if class index is mapped to one-hot encoding in order (i.e. whether using np.eye is valid)
+# * Need to check how to store previous prediction for regression
+# * Can consider having a pre-trained model and a set of PCA params for left hand only, right hand only and both hands just in case one hand malfunctions
+# * Only run inference if there is FSR data registered, regardless of whether one or two hands are active
