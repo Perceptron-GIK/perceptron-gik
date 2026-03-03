@@ -30,8 +30,6 @@ IMU_IDX_TO_PART = {
     34: "pinky"
 }
 
-CHARIDX_TO_ONEHOT = np.eye(NUM_CLASSES)
-
 def filter_imu_data(data: np.ndarray) -> np.ndarray:
     '''
     Apply IMU filtering to a single window of IMU data from one hand
@@ -84,7 +82,7 @@ def add_prev_char(data, prev_char):
         return F.pad(data, (0, 40))
     else:
         nRows = data.shape[1]
-        prev_char_onehot = torch.from_numpy(CHARIDX_TO_ONEHOT[[prev_char]]).float().unsqueeze(1).repeat(1, nRows, 1)
+        prev_char_onehot = F.one_hot(torch.tensor([prev_char]), num_classes=NUM_CLASSES).float().unsqueeze(1).repeat(1, nRows, 1)
         return torch.cat((data, prev_char_onehot), dim=2)
 
 def preprocess(
