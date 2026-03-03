@@ -76,10 +76,9 @@ class Preprocessing:
             return Preprocessing._pad_to_length(right, max_len)
         if has_l and not has_r:
             return Preprocessing._pad_to_length(left, max_len)
-        t = min(max(len(right), len(left)), max_len)
         return np.concatenate([
-            Preprocessing._pad_to_length(right, max_len),
             Preprocessing._pad_to_length(left, max_len),
+            Preprocessing._pad_to_length(right, max_len),
         ], axis=1)
 
     @staticmethod
@@ -118,7 +117,6 @@ class Preprocessing:
     def align(
         self,
         max_seq_length: int = 100,
-        filter_func: Optional[callable] = None,
     ) -> Tuple[List[np.ndarray], List[str], List[str], Dict[str, Any]]:
         """Returns (samples, labels, prev_labels, metadata). labels and prev_labels are characters (str). prev_labels use '' for no previous."""
         samples, labels, prev_labels = [], [], []
@@ -131,13 +129,9 @@ class Preprocessing:
         right_cols, left_cols = [], []
         if self.has_right:
             self.right.df = self.right.sorted_df
-            if filter_func is not None:
-                self.right.df = filter_func(self.right.df)
             right_cols = self.right.feature_columns
         if self.has_left:
             self.left.df = self.left.sorted_df
-            if filter_func is not None:
-                self.left.df = filter_func(self.left.df)
             left_cols = self.left.feature_columns
 
         skipped_chars = {}
@@ -181,6 +175,7 @@ class Preprocessing:
             'num_hands': (1 if self.has_right else 0) + (1 if self.has_left else 0),
             'has_right': self.has_right,
             'has_left': self.has_left,
+            'combined_col_names' : [f'{col}L' for col in left_cols ] + [f'{col}R' for col in right_cols ],
             'feat_dim': feat_dim,
             'features_per_hand': n_right or n_left,
             'max_seq_length': max_seq_length,
