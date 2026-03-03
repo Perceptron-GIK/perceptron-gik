@@ -15,6 +15,8 @@ import cProfile
 DEVICE_NAME_L = "GIK_Nano_L" # Left hand nano name
 DEVICE_NAME_R = "GIK_Nano_R" # Right hand nano name
 KEYBOARD_NAME = "Keyboard"
+WAIT_BOTH_TIMEOUT = 10.0 # Seconds to wait for both devices to connect before starting (ensure its is float)
+EXPECT_BOTH_HANDS = True # Whether to wait for both hands to connect before starting (set to False to start with one hand)
 
 UUID_TX_L = "00001235-0000-1000-8000-00805f9b34fb" # Left hand TX characteristic UUID
 UUID_TX_R = "00001237-0000-1000-8000-00805f9b34fb" # Right hand TX characteristic UUID
@@ -47,6 +49,43 @@ DATA_DIR = os.path.join(SCRIPT_DIR, "data")
 # INITIALISATION   
 
 keyboard_started = False
+hand_ready = {"Left": False, "Right": False,} 
+first_ready_time: float | None = None
+hand_state_lock = asyncio.Lock() # 
+
+async def wait_and_decide_start(side: str):
+    """
+    Called inside each connect() just before start_notify.
+    Blocks up to WAIT_BOTH_TIMEOUT if both hands are expected.
+    Returns "dual" or "single".
+    """
+    global first_ready_time
+    other_side = "Right" if side == "Left" else "Left"
+
+    async with hand_state_lock:
+        hand_ready[side] = True
+        now = time.time()
+        if first_ready_time is None:
+            first_ready_time = now
+
+        if not EXPECT_BOTH_HANDS:
+            return "single"
+
+        # If the other side is already ready, we can go dual immediately
+        if hand_ready[other_side]:
+            return "dual"
+
+        start_wait = first_ready_time
+
+    # Wait (without holding the lock) for other hand or timeout
+    while True:
+        async with hand_state_lock:
+            if hand_ready[other_side]:
+                return "dual"
+            elapsed = time.time() - start_wait
+        if elapsed > WAIT_BOTH_TIMEOUT:
+            return "single"
+        await asyncio.sleep(0.1)
 
 
 def get_session_file(name: str) -> str:
@@ -312,6 +351,13 @@ async def connect(device_name, uuid, queue):
 
             async with BleakClient(nano.address) as client:
                 retries = 0
+
+                mode = await wait_and_decide_start(side)
+                if mode == "dual":
+                    print(f"{side}: starting streaming in dual-hand mode (both hands ready).")
+                else:
+                    print(f"{side}: starting streaming in single-hand mode (timeout or only one hand).")
+
                 # Upon receiving notification from the nano we call the handler function
                 await client.start_notify(uuid, handler_closure(queue, side))
                 print(f"Connected to GIK {side} Hand - receiving data")
@@ -320,6 +366,14 @@ async def connect(device_name, uuid, queue):
 
             # To address the Nanos disconnect suddenly without able to reconnet 
             print(f"GIK {side} Hand disconnected - attempting reconnection...")
+            
+            # Mark this hand as not ready again
+            async with hand_state_lock:
+                hand_ready[side] = False
+                if not hand_ready["Left"] and not hand_ready["Right"]:
+                    global first_ready_time
+                    first_ready_time = None
+            
             retries = 0
         except Exception as e:
             retries += 1
