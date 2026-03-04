@@ -5,6 +5,7 @@ from bleak import BleakScanner, BleakClient
 from collections import deque
 
 from src.Constants.char_to_key import NUM_CLASSES, INDEX_TO_CHAR
+from src.inference.sliding_window import SlidingWindow
 from inference_preprocessing import preprocess
 from ml.models.gik_model import create_model
 
@@ -51,7 +52,7 @@ TRAINING_CONFIG = {
 TRAINING_CONFIG["output_logits"] = NUM_CLASSES
 
 INFERENCE_CONFIG = {
-    "max_seq_length": 10,
+    "max_seq_length": 30,
     "normalize": True,
     "apply_filtering": True,
     "reduce_dim": True,
@@ -62,6 +63,8 @@ INFERENCE_CONFIG = {
 MODEL_PATH = os.path.join(PROJECT_ROOT, "best_model.pt")
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
+
+FSR_INDICES = [12, 19, 26, 33, 40]
 
 ## ================================================== ##
 # BLUETOOTH FUNCTIONS
@@ -140,8 +143,8 @@ async def connect(device_name, uuid, queue):
 # INFERENCE FUNCTIONS
 
 def run_inference(
-    left: np.ndarray,
-    right: np.ndarray,
+    left: np.ndarray=None,
+    right: np.ndarray=None,
     prev_char: Any=None
 ):
     processed_data = preprocess(
@@ -170,7 +173,7 @@ def run_inference(
         input_dim = input_dim
     )
 
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
+    model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False))
     model.to(DEVICE)
     model.eval()
 
@@ -181,31 +184,55 @@ def run_inference(
     return prediction
     
 async def process_queues(left_queue, right_queue):
-    max_window_size = INFERENCE_CONFIG["max_seq_length"]
-    left_win = deque(maxlen=max_window_size)
-    right_win = deque(maxlen=max_window_size)
+    left_win = SlidingWindow()
+    right_win = SlidingWindow()
     prev_char = None
 
     while True:
-        data_l, t_l = await left_queue.get()
-        data_l = np.asarray(data_l, dtype=np.float32)
-        data_l = np.concatenate([data_l[:, 1:], [t_l]])
-        left_win.append(data_l)
+        left_task = asyncio.create_task(left_queue.get())
+        right_task = asyncio.create_task(right_queue.get())
+        completed, _ = await asyncio.wait(
+            [left_task, right_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
 
-        data_r, t_r = await right_queue.get()
-        data_r = np.asarray(data_r, dtype=np.float32)
-        data_r = np.concatenate([data_r[:, 1:], [t_r]])
-        right_win.append(data_r)
+        for task in completed:
+            data, t = task.result()
+            data = np.asarray(data, dtype=np.float32)
+            data = np.concatenate([data[1:], [t]])
 
-        # To-Do: Add logic to check if FSR data is registered before running inference
+            if task == left_task:
+                left_win.append(data)      
+                left_task = asyncio.create_task(left_queue.get())
+                triggered_hand = "left"
 
-        if len(left_win) == max_window_size and len(right_win) == max_window_size:
-            prev_char = await asyncio.to_thread(run_inference, left_win, right_win, prev_char)
+            elif task == right_task:
+                right_win.append(data)
+                right_task = asyncio.create_task(right_queue.get())
+                triggered_hand = "right"
+        
+        idx = left_win.fsr_detected(fsr_indices=FSR_INDICES) if triggered_hand == "left" else right_win.fsr_detected(fsr_indices=FSR_INDICES)
+        if idx is None:
+            continue
+        chunk = np.stack(left_win.pop_chunk(idx+1)) if triggered_hand == "left" else np.stack(right_win.pop_chunk(idx+1))
+        if chunk.shape[0] < 5: # Failsafe, remove after FSRs are stable
+            continue
+        timestamp = chunk[-1][-1]
+        opp_idx = right_win.timestamp_matched(timestamp=timestamp) if triggered_hand == "left" else left_win.timestamp_matched(timestamp=timestamp)
+        if opp_idx:
+            opp_chunk = np.stack(right_win.pop_chunk(opp_idx+1)) if triggered_hand == "left" else np.stack(left_win.pop_chunk(opp_idx+1))
+        else:
+            opp_chunk = None
+        
+        if triggered_hand == "left":
+            prev_char = await asyncio.to_thread(run_inference, chunk, opp_chunk, prev_char)
+        else:
+            prev_char = await asyncio.to_thread(run_inference, opp_chunk, chunk, prev_char)
 
 ## ================================================== ##
 
 async def main():
-    print(f"Waiting for GIK to appear...", flush=True)
+    print("Waiting for GIK to appear...")
 
     data_queue_left = asyncio.Queue(MAX_QUEUE_SIZE)
     data_queue_right = asyncio.Queue(MAX_QUEUE_SIZE)
@@ -215,10 +242,3 @@ async def main():
                          process_queues(data_queue_left, data_queue_right))
 
 asyncio.run(main())
-
-## ================================================== ##
-# ISSUES/TO-DO
-# * Need to check if class index is mapped to one-hot encoding in order (i.e. whether using np.eye is valid)
-# * Need to check how to store previous prediction for regression
-# * Can consider having a pre-trained model and a set of PCA params for left hand only, right hand only and both hands just in case one hand malfunctions
-# * Only run inference if there is FSR data registered, regardless of whether one or two hands are active
