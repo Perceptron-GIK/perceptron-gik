@@ -49,9 +49,9 @@ def filter_imu_data(data: np.ndarray) -> np.ndarray:
             if imu_col == 0: # Use the base IMU as a reference for the keyboard frame
                 R0_ref, a, *_ = tracker.track_attitude(imu_data, init_tuple)
             else:
-                _, a, *_ = tracker.track_attitude(imu_data, init_tuple, R0_ref=R0_ref)
-
-            a_p = tracker.remove_acc_drift(a, threshold=0.2, filter=True, cof=(0.1, 5))
+                _, a, *_ = tracker.track_attitude(imu_data, init_tuple, R0_ref=R0_ref)    
+ 
+            a_p = tracker.remove_acc_drift(a, threshold=0.2, filter=False, cof=(0.1, 5))
             vel = tracker.zupt(a_p, threshold=0.2)
             pos = tracker.track_position(a, vel)
 
@@ -62,7 +62,7 @@ def filter_imu_data(data: np.ndarray) -> np.ndarray:
             filtered_data = np.concatenate((filtered_data[:, :-1], pos_adjusted, filtered_data[:, -1:]), axis=1)
 
         except Exception as e:
-            print(f"Warning: Filtering failed for {IMU_IDX_TO_PART[imu_col]} IMU")
+            print(f"Warning: Filtering failed for {IMU_IDX_TO_PART[imu_col]} IMU, {e}")
             filtered_data = np.concatenate((filtered_data[:, :-1], np.zeros((data.shape[0], 3)), filtered_data[:, -1:]), axis=1)
 
     return filtered_data
