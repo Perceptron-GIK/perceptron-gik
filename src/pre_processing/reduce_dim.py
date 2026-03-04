@@ -198,7 +198,7 @@ def pca(data, dims_ratio, output_path, root_dir):
         if not os.path.exists(params_path):
             raise FileNotFoundError("PCA parameters file not found in root directory.")
         
-        pca_params = torch.load(os.path.join(root_dir, "pca_params.pt"))
+        pca_params = torch.load(os.path.join(root_dir, "pca_params.pt"), weights_only=False)
         mean = pca_params["mean"]
         components = pca_params["components"]
         samples_centered = samples - mean
