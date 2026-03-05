@@ -253,13 +253,14 @@ def preprocess_multiple_sources(
             samples_tensor = padded_samples
 
     samples_stacked = torch.stack(samples_tensor) if samples_tensor else torch.tensor([])
+    effective_feat_dim = len(combined_cols)
 
     combined_metadata = {
         'num_samples': len(all_samples),
         'num_hands': metadata['num_hands'],
         'has_right': metadata['has_right'],
         'has_left': metadata['has_left'],
-        'feat_dim': metadata['feat_dim'],
+        'feat_dim': effective_feat_dim,
         'combined_col_names': combined_cols,
         'features_per_hand': metadata['features_per_hand'],
         'max_seq_length': max_seq_length,
