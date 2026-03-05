@@ -50,8 +50,11 @@ def filter_imu_data(data: np.ndarray) -> np.ndarray:
                 R0_ref, a, *_ = tracker.track_attitude(imu_data, init_tuple)
             else:
                 _, a, *_ = tracker.track_attitude(imu_data, init_tuple, R0_ref=R0_ref)    
- 
-            a_p = tracker.remove_acc_drift(a, threshold=0.2, filter=False, cof=(0.1, 5))
+
+            try:
+                a_p = tracker.remove_acc_drift(a, threshold=0.2, filter=True, cof=(0.1, 5))
+            except:
+                a_p = tracker.remove_acc_drift(a, threshold=0.2, filter=False, cof=(0.1, 5))
             vel = tracker.zupt(a_p, threshold=0.2)
             pos = tracker.track_position(a, vel)
 
@@ -96,6 +99,8 @@ def add_prev_char(data, prev_char, mode):
 def preprocess(
     left_data: Optional[np.ndarray] = None,
     right_data: Optional[np.ndarray] = None,
+    left_pointer: int=None,
+    right_pointer: int=None,
     prev_char: Any=None,
     mode: str="classification",
     max_seq_length: int=100,
@@ -112,6 +117,8 @@ def preprocess(
     Args:
         left_data: Array of data from the left hand
         right_data: Array of data from the right hand
+        left_pointer: Index at which the current left hand inference window starts
+        right_pointer: Index at which the current right hand inference window starts
         prev_char: Index of previous character prediction
         mode: "classification" or "regression"
         max_seq_length: Window length for data alignment
@@ -130,8 +137,10 @@ def preprocess(
     )
 
     samples, metadata = preprocessor.align(
-        max_seq_length=max_seq_length,
-        filter_fn = filter_imu_data if apply_filtering else None
+        max_seq_length = max_seq_length,
+        filter_fn = filter_imu_data if apply_filtering else None,
+        left_pointer = left_pointer,
+        right_pointer = right_pointer
     )
 
     if left_data is not None and right_data is not None:

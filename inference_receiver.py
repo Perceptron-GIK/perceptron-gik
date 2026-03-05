@@ -144,11 +144,15 @@ async def connect(device_name, uuid, queue):
 def run_inference(
     left: np.ndarray=None,
     right: np.ndarray=None,
+    left_pointer: int=None,
+    right_pointer: int=None,
     prev_char: Any=None
 ):
     processed_data = preprocess(
         left_data = left,
         right_data = right,
+        left_pointer = left_pointer,
+        right_pointer = right_pointer,
         prev_char = prev_char,
         mode = EXPERIMENT_MODE,
         max_seq_length = INFERENCE_CONFIG["max_seq_length"],
@@ -186,6 +190,8 @@ def run_inference(
 async def process_queues(left_queue, right_queue):
     left_win = SlidingWindow()
     right_win = SlidingWindow()
+    left_all = SlidingWindow(maxlen=1000)
+    right_all = SlidingWindow(maxlen=1000)
     prev_char = None
 
     while True:
@@ -215,19 +221,23 @@ async def process_queues(left_queue, right_queue):
         if idx is None:
             continue
         chunk = np.stack(left_win.pop_chunk(idx+1)) if triggered_hand == "left" else np.stack(right_win.pop_chunk(idx+1))
-        if chunk.shape[0] <= 2:
-            continue
+        pointer = chunk.shape[0]
         timestamp = chunk[-1][-1]
         opp_idx = right_win.timestamp_matched(timestamp=timestamp) if triggered_hand == "left" else left_win.timestamp_matched(timestamp=timestamp)
         if opp_idx:
             opp_chunk = np.stack(right_win.pop_chunk(opp_idx+1)) if triggered_hand == "left" else np.stack(left_win.pop_chunk(opp_idx+1))
         else:
             opp_chunk = np.zeros_like(chunk)
+        opp_pointer = opp_chunk.shape[0]
         
         if triggered_hand == "left":
-            prev_char = await asyncio.to_thread(run_inference, chunk, opp_chunk, prev_char)
+            left_all.append(chunk)
+            right_all.append(opp_chunk)
+            prev_char = await asyncio.to_thread(run_inference, np.vstack(left_all), np.vstack(right_all), pointer, opp_pointer, prev_char)
         else:
-            prev_char = await asyncio.to_thread(run_inference, opp_chunk, chunk, prev_char)
+            left_all.append(opp_chunk)
+            right_all.append(chunk)
+            prev_char = await asyncio.to_thread(run_inference, np.vstack(left_all), np.vstack(right_all), opp_pointer, pointer, prev_char)
 
 ## ================================================== ##
 
