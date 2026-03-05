@@ -1,6 +1,21 @@
 import torch
 from typing import Dict, Optional
 
+
+def _index_map(col_names):
+    return {name: i for i, name in enumerate(col_names)}
+
+
+def _get_part_from_fsr_col(col_name: str) -> str:
+    # f_thumbL -> thumbL
+    return col_name.split("f_", 1)[1]
+
+
+def _split_finger_and_side(part: str):
+    if part.endswith(("L", "R")):
+        return part[:-1], part[-1]
+    return part, None
+
 def reduce_dim(
         data_dir: str,
         method: str,
@@ -44,23 +59,67 @@ def reduce_dim(
 def active_imu_only(data_dir, has_left, has_right, normalise, output_path):
     data = torch.load(data_dir)
     samples = data["samples"]
-    
-    if has_left and has_right:
-        fsr_indices = torch.tensor([12, 19, 26, 33, 40, 71, 78, 85, 92, 99])
-        base_indices = torch.tensor([0, 1, 2, 3, 4, 5, 41, 42, 43, 59, 60, 61, 62, 63, 64, 100, 101, 102])
-        pos_ref = torch.tensor([44, 103]) # Starting index of predicted positions for finger IMUs
-    else:
-        fsr_indices = torch.tensor([12, 19, 26, 33, 40])
-        base_indices = torch.tensor([0, 1, 2, 3, 4, 5, 41, 42, 43])
-        pos_ref = torch.tensor([44])
+    meta = data.get("metadata", {})
+    col_names = meta.get("combined_col_names", [])
+    if not col_names:
+        raise ValueError("metadata['combined_col_names'] is required for active-imu reduction")
+    # Prefer saved metadata over caller flags to avoid mismatch errors.
+    has_left = bool(meta.get("has_left", has_left))
+    has_right = bool(meta.get("has_right", has_right))
+
+    idx = _index_map(col_names)
+
+    fsr_cols = [c for c in col_names if c.startswith("f_")]
+    fsr_indices = torch.tensor([idx[c] for c in fsr_cols], dtype=torch.long)
+    if fsr_indices.numel() == 0:
+        raise ValueError("No FSR columns found in dataset metadata")
+
+    base_parts = []
+    if has_left:
+        base_parts.append("baseL")
+    if has_right:
+        base_parts.append("baseR")
+
+    base_indices = []
+    for part in base_parts:
+        for axis in ("ax", "ay", "az", "gx", "gy", "gz", "x", "y", "z"):
+            name = f"{axis}_{part}"
+            if name in idx:
+                base_indices.append(idx[name])
+    base_indices = torch.tensor(base_indices, dtype=torch.long)
+
+    # For each FSR/finger part, gather ax..gz columns (active IMU motion streams).
+    imu6_table = []
+    finger_parts = []
+    for fsr_col in fsr_cols:
+        part = _get_part_from_fsr_col(fsr_col)
+        finger_parts.append(part)
+        imu6 = [idx[f"{axis}_{part}"] for axis in ("ax", "ay", "az", "gx", "gy", "gz")]
+        imu6_table.append(imu6)
+    imu6_table = torch.tensor(imu6_table, dtype=torch.long)
+
+    # Position indices for active finger(s).
+    pos3_table = torch.tensor(
+        [[idx[f"x_{part}"], idx[f"y_{part}"], idx[f"z_{part}"]] for part in finger_parts],
+        dtype=torch.long,
+    )
+    part_to_fsr_idx = {part: i for i, part in enumerate(finger_parts)}
+    opposite_hand_idx = []
+    for part in finger_parts:
+        finger, side = _split_finger_and_side(part)
+        if side == "L":
+            opposite_part = f"{finger}R"
+        elif side == "R":
+            opposite_part = f"{finger}L"
+        else:
+            opposite_part = part
+        opposite_hand_idx.append(part_to_fsr_idx.get(opposite_part, part_to_fsr_idx[part]))
+    opposite_hand_idx = torch.tensor(opposite_hand_idx, dtype=torch.long)
     
     W, R, C = samples.shape # (nWindows, nRows, nCols)
     fsr_data = samples[:, :, fsr_indices] # (W, R, C), extract the columns with FSR data
     active_finger = (fsr_data != 0).sum(dim=1).argmax(dim=1) # (W, 1), identify the active finger which is an index from 0-9
-    active_fsr = fsr_indices[active_finger].unsqueeze(1) # (W, 1), identify the feature index of the active FSR
-
-    fsr_offsets = torch.arange(6).unsqueeze(0) # (1, 6)
-    cols_to_keep = active_fsr - 6 + fsr_offsets # (W, 6), keep the 6 columns of active IMU data from each window
+    cols_to_keep = imu6_table[active_finger]  # (W, 6), active finger ax..gz
     cols_to_keep = cols_to_keep.unsqueeze(1).expand(-1, R, -1) # (W, R, 6), reshape to match data dimensions
     output = torch.gather(samples, dim=2, index=cols_to_keep) # (W, R, 6), gather the active IMU data from each window
     
@@ -75,15 +134,15 @@ def active_imu_only(data_dir, has_left, has_right, normalise, output_path):
     base_data = samples[:, :, base_indices]
     output = torch.cat([output, base_data], dim=2)
 
-    # If both hands, shift the right hand finger indices from 5-9 to 0-4
-    active_finger = torch.where((has_left and has_right) & (active_finger >= 5), active_finger - 5, active_finger).unsqueeze(1) # (W, 1)
-
     # Insert predicted positions for active finger IMU
-    pos_start = (active_finger*3).unsqueeze(1) # (W, 1, 1), starting index of predicted position for the active finger
-    pos_offsets = torch.arange(3).unsqueeze(0).unsqueeze(0) # (1, 1, 3), pos xyz
-    pos_ref = pos_ref.unsqueeze(0).unsqueeze(2) # (1, nHands, 1)
-    pos_indices = pos_start + pos_ref + pos_offsets # (W, nHands, 3)
-    pos_indices = pos_indices.reshape(W, -1) # (W, nHands*3)
+    if has_left and has_right:
+        # Keep behavior of returning both-hand positions for corresponding finger family.
+        active_pos = pos3_table[active_finger]
+        paired_pos = pos3_table[opposite_hand_idx[active_finger]]
+        pos_indices = torch.cat([active_pos, paired_pos], dim=1)  # (W, 6)
+    else:
+        pos_indices = pos3_table[active_finger]  # (W, 3)
+
     pos_indices = pos_indices.unsqueeze(1).expand(-1, R, -1) # (W, R, nHands*3)
     pos_data = torch.gather(samples, dim=2, index=pos_indices) # (W, R, nHands*3)
     output = torch.cat([output, pos_data], dim=2)
@@ -95,7 +154,7 @@ def active_imu_only(data_dir, has_left, has_right, normalise, output_path):
         mean = all_data.mean(dim=0)
         std = all_data.std(dim=0)
         std[std == 0] = 1.0
-    output = (output - mean) / std
+        output = (output - mean) / std
 
     # Update .pt file
     data["samples"] = output

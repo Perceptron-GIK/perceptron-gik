@@ -1,15 +1,23 @@
 data:
-  data_dir: "data_hazel_4"
+  data_dir: "data_hazel_5"
   keyboard_files:
-    - "Keyboard_16.csv"
+    - "Keyboard_18.csv"
   left_files:
-    - "Left_16.csv"
-  right_files:
-    - "Right_10.csv"
+    - "Left_18.csv"
+  right_files: 
+    - "Right_12.csv"
 
 experiment:
   mode: "classification" # "coordinate" or "classification"
+  mode: "classification" # "coordinate" or "classification"
   max_seq_length: 10
+  normalize: true
+  apply_filtering: false
+  use_dim_reduction: false
+  use_augmentation: false
+  use_class_weights: false
+  run_preprocess: true
+  export_dataset_csv: true
   use_dim_reduction: true
   dim_red_method: "pca" # "pca" or "active-imu"
   dim_red_dims_ratio: 0.4 # used by pca
@@ -26,7 +34,7 @@ model:
   inner_model_prams:
     bidirectional: true
     dropout: 0.5
-    num_layers: 2
+    num_layers: 3
     num_heads: 16
 
 train:
@@ -57,5 +65,5 @@ modes:
     regression: true
     loss: "CoordinateLossClassification"
     loss_params:
-      h_v_ratio: 0.5
+      h_v_ratio: 0.8
       bias: 0.3
