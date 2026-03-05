@@ -50,6 +50,7 @@ def build_config(config_data: dict) -> dict:
         "enable_class_weights": mode_cfg.get("use_class_weights", False),
         "run_preprocess": experiment["run_preprocess"],
         "export_dataset_csv": experiment["export_dataset_csv"],
+        "use_augmentation": experiment["use_augmentation"],
         **config_data["model"],
         **config_data["train"],
         **mode_cfg,
@@ -64,16 +65,19 @@ def build_config(config_data: dict) -> dict:
         "CoordinateLoss": CoordinateLoss,
         "FocalLoss": FocalLoss,
     }
-    output_logits_registry = {"NUM_CLASSES": NUM_CLASSES}
+    output_logits_registry = {
+        "NUM_CLASSES": NUM_CLASSES,
+    }
 
     config["key_mapping_dict"] = key_mapping_registry[config["key_mapping_dict"]]
     config["loss"] = loss_registry[config["loss"]]
     if isinstance(config["output_logits"], str):
         config["output_logits"] = output_logits_registry[config["output_logits"]]
+
     return config
 
 
-def maybe_prepare_dataset(config: dict, data_cfg: dict) -> Path:
+def prepare_dataset(config: dict, data_cfg: dict) -> Path:
     data_dir = PROJECT_ROOT / data_cfg["data_dir"]
     data_dir.mkdir(parents=True, exist_ok=True)
     processed_path = data_dir / "processed_dataset.pt"
@@ -99,7 +103,7 @@ def maybe_prepare_dataset(config: dict, data_cfg: dict) -> Path:
         dim_red_output = data_dir / "dim_red_output.pt"
         if config["run_preprocess"] or not dim_red_output.exists():
             payload = torch.load(processed_path, weights_only=False)
-            meta = payload["metadata"]
+            meta = payload.get("metadata", {})
             reduce_kwargs = {
                 "data_dir": str(processed_path),
                 "method": config.get("dim_red_method", "pca"),
@@ -116,7 +120,7 @@ def maybe_prepare_dataset(config: dict, data_cfg: dict) -> Path:
     return dataset_path
 
 
-def apply_class_weights_if_needed(config: dict, dataset_path: Path) -> dict:
+def apply_class_weights(config: dict, dataset_path: Path) -> dict:
     out = copy.deepcopy(config)
     out["loss_params"] = copy.deepcopy(config.get("loss_params", {}))
     if out["enable_class_weights"]:
@@ -128,176 +132,147 @@ def apply_class_weights_if_needed(config: dict, dataset_path: Path) -> dict:
     return out
 
 
-def _get_by_path(d: dict, path: str):
-    cur = d
-    for part in path.split("."):
-        if not isinstance(cur, dict) or part not in cur:
-            return None
-        cur = cur[part]
-    return cur
+def suggest_trial_params(trial: optuna.Trial, base_config: dict) -> dict:
+    cfg = copy.deepcopy(base_config)
 
+    cfg["dim_red_method"] = trial.suggest_categorical(
+        "experiment.dim_red_method", ["pca", "active-imu"]
+    )
+    if cfg["dim_red_method"] == "pca":
+        cfg["dim_red_dims_ratio"] = trial.suggest_float(
+            "experiment.dim_red_dims_ratio", 0.2, 0.8, step=0.1
+        )
 
-def _set_by_path(d: dict, path: str, value):
-    parts = path.split(".")
-    cur = d
-    for part in parts[:-1]:
-        if part not in cur or not isinstance(cur[part], dict):
-            cur[part] = {}
-        cur = cur[part]
-    cur[parts[-1]] = value
+    cfg["model_type"] = trial.suggest_categorical(
+        "model_type", ["attention_lstm", "lstm", "gru", "transformer", "cnn", "rnn"]
+    )
+    cfg["learning_rate"] = trial.suggest_float("learning_rate", 1e-4, 5e-3, log=True)
+    cfg["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True)
+    cfg["batch_size"] = trial.suggest_categorical("batch_size", [16, 32, 64, 128])
+    cfg["dropout"] = trial.suggest_float("dropout", 0.1, 0.8)
+    cfg["hidden_dim_inner_model"] = trial.suggest_categorical(
+        "hidden_dim_inner_model", [64, 96, 128, 192, 256, 512, 1024]
+    )
+    cfg["hidden_dim_classification_head"] = trial.suggest_categorical(
+        "hidden_dim_classification_head", [64, 128, 256, 512, 1024]
+    )
+    cfg["num_layers"] = trial.suggest_int("num_layers", 1, 5)
 
+    model_type = cfg["model_type"]
+    inner_cfg = copy.deepcopy(cfg.get("inner_model_prams", {}))
+    inner_cfg["dropout"] = trial.suggest_float("inner_model_prams.dropout", 0.1, 0.8)
 
-def _when_matches(cfg: dict, when: dict) -> bool:
-    for key, expected in when.items():
-        actual = _get_by_path(cfg, key)
-        if isinstance(expected, list):
-            if actual not in expected:
-                return False
-        else:
-            if actual != expected:
-                return False
-    return True
+    if model_type in ["lstm", "gru", "attention_lstm", "transformer", "rnn"]:
+        inner_cfg["num_layers"] = trial.suggest_int("inner_model_prams.num_layers", 1, 5)
 
+    if model_type in ["lstm", "gru", "attention_lstm", "rnn"]:
+        inner_cfg["bidirectional"] = trial.suggest_categorical(
+            "inner_model_prams.bidirectional", [True, False]
+        )
 
-def _extract_experiment_overrides(search_space: dict) -> dict:
-    return {k: v for k, v in search_space.items() if k.startswith("experiment.")}
+    if model_type in ["transformer", "attention_lstm"]:
+        inner_cfg["num_heads"] = trial.suggest_categorical(
+            "inner_model_prams.num_heads", [2, 4, 8, 16, 32]
+        )
 
+    if model_type == "cnn":
+        inner_cfg["kernel_sizes"] = trial.suggest_categorical(
+            "inner_model_prams.kernel_sizes",
+            [[3, 5, 7], [3, 3, 5], [5, 7, 9], [3, 5]],
+        )
 
-def _strip_experiment_prefix(path: str) -> str:
-    if path.startswith("experiment."):
-        return path[len("experiment."):]
-    return path
+    cfg["inner_model_prams"] = inner_cfg
 
+    cfg["loss_params"] = copy.deepcopy(cfg.get("loss_params", {}))
+    if cfg["mode"] == "coordinate":
+        cfg["loss_params"]["h_v_ratio"] = trial.suggest_float(
+            "loss_params.h_v_ratio", 0.2, 1.6, step=0.1
+        )
+        cfg["loss_params"]["bias"] = trial.suggest_float(
+            "loss_params.bias", 0.0, 0.3, step=0.05
+        )
+    elif cfg["mode"] == "classification":
+        cfg["loss_params"]["gamma"] = trial.suggest_float(
+            "loss_params.gamma", 1.0, 4.0, step=0.5
+        )
 
-def _suggest_from_spec(trial: optuna.Trial, name: str, spec: dict):
-    t = spec["type"]
-    if t == "float":
-        kwargs = {"log": bool(spec.get("log", False))}
-        if "step" in spec:
-            kwargs["step"] = spec["step"]
-            kwargs["log"] = False
-        return trial.suggest_float(name, spec["low"], spec["high"], **kwargs)
-    if t == "int":
-        step = int(spec.get("step", 1))
-        return trial.suggest_int(name, int(spec["low"]), int(spec["high"]), step=step)
-    if t == "categorical":
-        return trial.suggest_categorical(name, spec["choices"])
-    if t == "bool":
-        return trial.suggest_categorical(name, [True, False])
-    raise ValueError(f"Unsupported search-space type: {t} for {name}")
-
-
-def suggest_trial_params(trial: optuna.Trial, config: dict, search_space: dict) -> dict:
-    cfg = copy.deepcopy(config)
-
-    for param_path, spec in search_space.items():
-        if param_path.startswith("experiment."):
-            continue
-        when = spec.get("when")
-        if when and not _when_matches(cfg, when):
-            continue
-        value = _suggest_from_spec(trial, param_path, spec)
-        if param_path == "inner_model_prams.kernel_sizes" and isinstance(value, str):
-            value = [int(v.strip()) for v in value.split(",") if v.strip()]
-        _set_by_path(cfg, param_path, value)
-
-    # Keep wrapper and inner model depth/dropout aligned unless explicitly tuned separately.
-    inner = copy.deepcopy(cfg.get("inner_model_prams", {}))
-    inner.setdefault("dropout", cfg["dropout"])
-    inner.setdefault("num_layers", cfg["num_layers"])
-    cfg["inner_model_prams"] = inner
     return cfg
 
 
-def objective_factory(
+def objective(
+    trial: optuna.Trial,
     base_config: dict,
     data_cfg: dict,
     device: str,
     max_epochs: int,
-    search_space: dict,
-    experiment_space: dict,
 ):
-    def objective(trial: optuna.Trial):
-        trial_base = copy.deepcopy(base_config)
-        for exp_path, spec in experiment_space.items():
-            when = spec.get("when")
-            if when and not _when_matches(trial_base, when):
-                continue
-            value = _suggest_from_spec(trial, exp_path, spec)
-            _set_by_path(trial_base, _strip_experiment_prefix(exp_path), value)
+    cfg = suggest_trial_params(trial, base_config)
+    dataset_path = prepare_dataset(cfg, data_cfg)
+    cfg = apply_class_weights(cfg, dataset_path)
 
-        dataset_path = maybe_prepare_dataset(trial_base, data_cfg)
-        cfg = suggest_trial_params(trial, trial_base, search_space)
-        cfg = apply_class_weights_if_needed(cfg, dataset_path)
+    dataset = load_preprocessed_dataset(
+        str(dataset_path),
+        is_one_hot_labels=cfg["is_one_hot"],
+        char_to_index=cfg["key_mapping_dict"],
+        return_class_id=cfg["return_class_id"],
+    )
 
-        dataset = load_preprocessed_dataset(
-            str(dataset_path),
-            is_one_hot_labels=cfg["is_one_hot"],
-            char_to_index=cfg["key_mapping_dict"],
-            return_class_id=cfg["return_class_id"],
-        )
+    model = create_model_auto_input_dim(
+        dataset,
+        model_type=cfg["model_type"],
+        hidden_dim_inner_model=cfg["hidden_dim_inner_model"],
+        hidden_dim_classification_head=cfg["hidden_dim_classification_head"],
+        no_layers_classification_head=cfg["num_layers"],
+        dropout_inner_layers=cfg["dropout"],
+        inner_model_kwargs=cfg["inner_model_prams"],
+        output_logits=cfg["output_logits"],
+    )
 
-        model = create_model_auto_input_dim(
-            dataset,
-            model_type=cfg["model_type"],
-            hidden_dim_inner_model=cfg["hidden_dim_inner_model"],
-            hidden_dim_classification_head=cfg["hidden_dim_classification_head"],
-            no_layers_classification_head=cfg["num_layers"],
-            dropout_inner_layers=cfg["dropout"],
-            inner_model_kwargs=cfg["inner_model_prams"],
-            output_logits=cfg["output_logits"],
-        )
+    trainer = GIKTrainer(
+        model=model,
+        dataset=dataset,
+        augmentation=cfg["use_augmentation"],
+        batch_size=cfg["batch_size"],
+        learning_rate=cfg["learning_rate"],
+        weight_decay=cfg["weight_decay"],
+        device=device,
+        loss=cfg["loss"],
+        loss_kwargs=cfg.get("loss_params"),
+        regression=cfg["regression"],
+    )
 
-        trainer = GIKTrainer(
-            model=model,
-            dataset=dataset,
-            batch_size=cfg["batch_size"],
-            learning_rate=cfg["learning_rate"],
-            weight_decay=cfg["weight_decay"],
-            device=device,
-            loss=cfg["loss"],
-            loss_kwargs=cfg.get("loss_params"),
-            regression=cfg["regression"],
-        )
+    history = trainer.train(
+        epochs=min(max_epochs, cfg["epochs"]),
+        early_stopping_patience=cfg["early_stopping"],
+        save_best=False,
+    )
 
-        history = trainer.train(
-            epochs=min(max_epochs, cfg["epochs"]),
-            early_stopping_patience=cfg["early_stopping"],
-            save_best=False,
-        )
+    best_val_acc = max(history.get("val_acc", [])) if history.get("val_acc") else None
+    best_val_loss = min(history["val_loss"]) if history.get("val_loss") else float("inf")
 
-        best_val_acc = max(history.get("val_acc", [])) if history.get("val_acc") else None
-        best_val_loss = min(history["val_loss"]) if history.get("val_loss") else float("inf")
+    if best_val_acc is not None:
+        objective_value = float(best_val_acc)
+        metric_name = "val_acc"
+    else:
+        objective_value = float(-best_val_loss)
+        metric_name = "neg_val_loss"
 
-        # Primary metric: validation accuracy (maximize).
-        # Regression/coordinate mode may not produce val_acc; fall back to -val_loss.
-        if best_val_acc is not None:
-            objective_value = float(best_val_acc)
-            metric_name = "val_acc"
-        else:
-            objective_value = float(-best_val_loss)
-            metric_name = "neg_val_loss"
+    trial.set_user_attr("mode", cfg["mode"])
+    trial.set_user_attr("model_type", cfg["model_type"])
+    trial.set_user_attr("dataset_path", str(dataset_path))
+    trial.set_user_attr("dim_red_method", cfg.get("dim_red_method"))
+    trial.set_user_attr("dim_red_dims_ratio", cfg.get("dim_red_dims_ratio"))
+    trial.set_user_attr("metric_name", metric_name)
+    trial.set_user_attr("best_val_loss", float(best_val_loss))
+    if best_val_acc is not None:
+        trial.set_user_attr("best_val_acc", float(best_val_acc))
 
-        trial.set_user_attr("mode", cfg["mode"])
-        trial.set_user_attr("model_type", cfg["model_type"])
-        trial.set_user_attr("dataset_path", str(dataset_path))
-        trial.set_user_attr("dim_red_method", cfg.get("dim_red_method"))
-        trial.set_user_attr("dim_red_dims_ratio", cfg.get("dim_red_dims_ratio"))
-        trial.set_user_attr("metric_name", metric_name)
-        trial.set_user_attr("best_val_loss", float(best_val_loss))
-        if best_val_acc is not None:
-            trial.set_user_attr("best_val_acc", float(best_val_acc))
-        return objective_value
-
-    return objective
+    return objective_value
 
 
 def _print_trial_progress(study: optuna.Study, trial: optuna.trial.FrozenTrial):
     status = trial.state.name
-    if trial.value is None:
-        value_str = "None"
-    else:
-        value_str = f"{float(trial.value):.6f}"
+    value_str = "None" if trial.value is None else f"{float(trial.value):.6f}"
 
     metric = trial.user_attrs.get("metric_name", "objective")
     model_type = trial.user_attrs.get("model_type", trial.params.get("model_type", "?"))
@@ -330,21 +305,11 @@ def main():
     parser.add_argument("--n-trials", type=int, default=20, help="Number of Optuna trials.")
     parser.add_argument("--timeout", type=int, default=None, help="Timeout in seconds.")
     parser.add_argument("--max-epochs", type=int, default=80, help="Epoch cap per trial.")
-    parser.add_argument(
-        "--search-space",
-        default="optuna_search_space.yaml",
-        help="YAML file defining suggest_trial_params search space.",
-    )
     args = parser.parse_args()
 
     config_path = PROJECT_ROOT / args.config
     with open(config_path, "r", encoding="utf-8") as f:
         config_data = yaml.safe_load(f)
-    search_space_path = PROJECT_ROOT / args.search_space
-    with open(search_space_path, "r", encoding="utf-8") as f:
-        search_space_data = yaml.safe_load(f)
-    search_space = search_space_data["search_space"]
-    experiment_space = _extract_experiment_overrides(search_space)
 
     base_config = build_config(config_data)
 
@@ -364,16 +329,14 @@ def main():
         direction="maximize",
         load_if_exists=True,
     )
-    objective = objective_factory(
-        base_config,
-        config_data["data"],
-        device,
-        args.max_epochs,
-        search_space,
-        experiment_space,
-    )
     study.optimize(
-        objective,
+        lambda trial: objective(
+            trial,
+            base_config=base_config,
+            data_cfg=config_data["data"],
+            device=device,
+            max_epochs=args.max_epochs,
+        ),
         n_trials=args.n_trials,
         timeout=args.timeout,
         callbacks=[_print_trial_progress],
@@ -397,7 +360,6 @@ def main():
         json.dump(best, f, indent=2)
 
     print("\n=== Optuna Search Complete ===")
-    print(f"Search space: {search_space_path}")
     metric_name = study.best_trial.user_attrs.get("metric_name", "objective")
     if metric_name == "val_acc":
         print(f"Best val acc: {study.best_value:.6f}")
@@ -409,4 +371,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
