@@ -1,5 +1,5 @@
 data:
-  data_dir: "data_jun_3"
+  data_dir: "data"
   keyboard_files:
     - "Keyboard_13.csv"
   left_files:
@@ -7,11 +7,12 @@ data:
   right_files: null
 
 experiment:
-  mode: "classification" # "coordinate" or "classification"
+  mode: "coordinate" # "coordinate" or "classification"
   max_seq_length: 10
   use_dim_reduction: true
   dim_red_method: "pca" # "pca" or "active-imu"
   dim_red_dims_ratio: 0.4 # used by pca
+  use_augmentation: true
   run_preprocess: false
   export_dataset_csv: false
 

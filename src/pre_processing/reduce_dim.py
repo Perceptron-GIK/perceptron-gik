@@ -92,7 +92,7 @@ def active_imu_only(data_dir, has_left, has_right, normalise, output_path):
     mean, std = None, None
     if normalise:
         all_data = torch.cat([w for w in output], dim=0)
-        mean = all_data.men(dim=0)
+        mean = all_data.mean(dim=0)
         std = all_data.std(dim=0)
         std[std == 0] = 1.0
     output = (output - mean) / std
