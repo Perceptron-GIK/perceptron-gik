@@ -54,9 +54,9 @@ INFERENCE_CONFIG = {
     "max_seq_length": 30,
     "normalize": True,
     "apply_filtering": True,
-    "reduce_dim": True,
-    "dim_red_method": "pca", # Set to None if reduce_dim == False
-    "dims_ratio": 0.4 # Set to 0.0 if dims_red_method != "pca"
+    "reduce_dim": False,
+    "dim_red_method": None, # Set to None if reduce_dim == False
+    "dims_ratio": 0.0 # Set to 0.0 if dims_red_method != "pca"
 }
 
 MODEL_PATH = os.path.join(PROJECT_ROOT, "best_model.pt")
@@ -222,7 +222,7 @@ async def process_queues(left_queue, right_queue):
         if opp_idx:
             opp_chunk = np.stack(right_win.pop_chunk(opp_idx+1)) if triggered_hand == "left" else np.stack(left_win.pop_chunk(opp_idx+1))
         else:
-            opp_chunk = None
+            opp_chunk = np.zeros_like(chunk)
         
         if triggered_hand == "left":
             prev_char = await asyncio.to_thread(run_inference, chunk, opp_chunk, prev_char)
