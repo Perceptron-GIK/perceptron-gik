@@ -112,7 +112,7 @@ def filter_imu_data(cols_list: list, sample: np.ndarray) -> torch.Tensor:
             df[f'gz_{part}'].to_numpy(),
         ]
         pos_streams = [
-            np.nan_to_num(pos[:, i], nan=0.0, posinf=0.0, neginf=0.0)
+            np.nan_to_num(pos[:, i] * 100, nan=0.0, posinf=0.0, neginf=0.0) # change to cm
             for i in range(3)
         ]
 
@@ -277,13 +277,14 @@ def preprocess_multiple_sources(
         mean = std = None
 
     samples_stacked = torch.stack(samples_tensor) if samples_tensor else torch.tensor([])
+    effective_feat_dim = len(combined_cols)
 
     combined_metadata = {
         'num_samples': len(all_samples),
         'num_hands': metadata['num_hands'],
         'has_right': metadata['has_right'],
         'has_left': metadata['has_left'],
-        'feat_dim': metadata['feat_dim'],
+        'feat_dim': effective_feat_dim,
         'combined_col_names': combined_cols,
         'features_per_hand': metadata['features_per_hand'],
         'max_seq_length': max_seq_length,
