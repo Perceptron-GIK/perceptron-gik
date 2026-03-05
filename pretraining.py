@@ -24,7 +24,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-from sqlalchemy.testing.suite.test_reflection import metadata
 from torch.utils.data import Dataset
 from typing import Optional, Tuple, List, Dict, Any, Union
 from collections import Counter
@@ -92,14 +91,14 @@ def filter_imu_data(cols_list: list, sample: np.ndarray) -> torch.Tensor:
         # Initialise and track attitude
         init_tuple = tracker.initialise(data)
         if R0_ref is None and part.startswith('base'):
-            R0_ref, a, *_ = tracker.track_attitude(data, init_tuple)
+            R0_ref, a, *_ = tracker.track_attitude(data, init_tuple,part)
         else:
             _, a, *_ = tracker.track_attitude(data, init_tuple, R0_ref=R0_ref)
 
         # Filter acceleration, compute vel and pos
         a_p = tracker.remove_acc_drift(a, threshold=0.2, filter=True, cof=(0.1, 5))
         vel = tracker.zupt(a_p, threshold=0.2)
-        pos = tracker.track_position(a_p, vel)
+        pos = tracker.track_position(a_p, vel, part)
 
         # Accel (3), gyro (3), pos (3): all 1D arrays of length T
         accel_streams = [

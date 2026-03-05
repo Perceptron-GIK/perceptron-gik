@@ -3,6 +3,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from .mathlib import *
 
+from src.Constants.char_to_key import INITIAL_KEY_COORDS
+
 class IMUTracker:
     def __init__(self, sr, use_mag=True):
         self.sr = sr # Sampling rate in Hz
@@ -246,7 +248,7 @@ class IMUTracker:
         velocities = np.array(velocities)
         return velocities
     
-    def track_position(self, a_world, velocities):
+    def track_position(self, a_world, velocities, part):
         '''
         Obtain position from acceleration and velocity data
 
@@ -259,7 +261,7 @@ class IMUTracker:
         nSamples = np.shape(a_world)[0]
         positions = []
         
-        pt = np.array([[0, 0, 0]]).T # Set the starting position as the origin
+        pt = np.array([INITIAL_KEY_COORDS[part]]).T # Set the starting position as the origin
         t = 0
         while t < nSamples:
             at = a_world[t, np.newaxis].T
