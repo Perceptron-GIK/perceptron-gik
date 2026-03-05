@@ -42,7 +42,7 @@ from src.pre_processing.alignment import Preprocessing
 from src.Constants.char_to_key import CHAR_TO_INDEX
 
 
-IMU_SAMPLING_RATE = 100.0
+IMU_SAMPLING_RATE = 28.57
 IMU_PARTS = ['baseL', 'thumbL', 'indexL', 'middleL', 'ringL', 'pinkyL',
              'baseR', 'thumbR', 'indexR', 'middleR', 'ringR', 'pinkyR']
 
