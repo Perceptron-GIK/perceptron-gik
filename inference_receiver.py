@@ -2,7 +2,6 @@ import asyncio, struct, time, os, sys, yaml, torch
 import numpy as np
 from typing import Callable, Any
 from bleak import BleakScanner, BleakClient
-from collections import deque
 
 from src.Constants.char_to_key import NUM_CLASSES, INDEX_TO_CHAR
 from src.inference.sliding_window import SlidingWindow
@@ -151,6 +150,7 @@ def run_inference(
         left_data = left,
         right_data = right,
         prev_char = prev_char,
+        mode = EXPERIMENT_MODE,
         max_seq_length = INFERENCE_CONFIG["max_seq_length"],
         normalize = INFERENCE_CONFIG["normalize"],
         apply_filtering = INFERENCE_CONFIG["apply_filtering"],
@@ -215,7 +215,7 @@ async def process_queues(left_queue, right_queue):
         if idx is None:
             continue
         chunk = np.stack(left_win.pop_chunk(idx+1)) if triggered_hand == "left" else np.stack(right_win.pop_chunk(idx+1))
-        if chunk.shape[0] < 5: # Failsafe, remove after FSRs are stable
+        if chunk.shape[0] <= 2:
             continue
         timestamp = chunk[-1][-1]
         opp_idx = right_win.timestamp_matched(timestamp=timestamp) if triggered_hand == "left" else left_win.timestamp_matched(timestamp=timestamp)

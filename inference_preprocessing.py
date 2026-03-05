@@ -17,7 +17,7 @@ from typing import Optional, Any
 from src.imu.main import IMUTracker
 from src.inference.align import AlignData
 from src.pre_processing.reduce_dim import reduce_dim
-from src.Constants.char_to_key import NUM_CLASSES
+from src.Constants.char_to_key import NUM_CLASSES, CHAR_TO_INDEX, INDEX_TO_CHAR, FULL_COORDS
 
 IMU_SAMPLING_RATE = 100.0
 IMU_COLS = [0, 6, 13, 20, 27, 34]
@@ -67,28 +67,37 @@ def filter_imu_data(data: np.ndarray) -> np.ndarray:
 
     return filtered_data
 
-def add_prev_char(data, prev_char):
+def add_prev_char(data, prev_char, mode):
     '''
     Adds the previous character prediction to the current window of data
 
     Args:
         data: 3D PyTorch tensor containing a single window of preprocessed data
         prev_char: Index of the previous character prediction
+        mode: "classification" or "regression"
 
     Returns:
         Data with prev_char added as a feature
     '''
+    nRows = data.shape[1]
     if not prev_char:
-        return F.pad(data, (0, 40))
+        if mode == "classification":
+            space = F.one_hot(torch.tensor([CHAR_TO_INDEX[" "]]), num_classes=NUM_CLASSES).float().unsqueeze(1).repeat(1, nRows, 1)
+        else:
+            space = torch.tensor(FULL_COORDS[" "]).float().unsqueeze(1).repeat(1, nRows, 1)
+        return torch.cat((data, space), dim=2)
     else:
-        nRows = data.shape[1]
-        prev_char_onehot = F.one_hot(torch.tensor([prev_char]), num_classes=NUM_CLASSES).float().unsqueeze(1).repeat(1, nRows, 1)
-        return torch.cat((data, prev_char_onehot), dim=2)
+        if mode == "classification":
+            prev_char = F.one_hot(torch.tensor([prev_char]), num_classes=NUM_CLASSES).float().unsqueeze(1).repeat(1, nRows, 1)
+        else:
+            prev_char = torch.tensor(FULL_COORDS[INDEX_TO_CHAR[prev_char]]).float().unsqueeze(1).repeat(1, nRows, 1)
+        return torch.cat((data, prev_char), dim=2)
 
 def preprocess(
     left_data: Optional[np.ndarray] = None,
     right_data: Optional[np.ndarray] = None,
     prev_char: Any=None,
+    mode: str="classification",
     max_seq_length: int=100,
     normalize: bool=True,
     apply_filtering: bool=True,
@@ -104,6 +113,7 @@ def preprocess(
         left_data: Array of data from the left hand
         right_data: Array of data from the right hand
         prev_char: Index of previous character prediction
+        mode: "classification" or "regression"
         max_seq_length: Window length for data alignment
         normalize: Whether to normalise the data
         apply_filtering: Whether to filter IMU data
@@ -182,6 +192,6 @@ def preprocess(
             dims_ratio=dims_ratio,
             root_dir=root_dir
         )
-        return add_prev_char(output, prev_char)
+        return add_prev_char(output, prev_char, mode)
     else:
-        return add_prev_char(samples, prev_char)
+        return add_prev_char(samples, prev_char, mode)
