@@ -9,18 +9,15 @@ data:
 
 experiment:
   mode: "classification" # "coordinate" or "classification"
-  mode: "classification" # "coordinate" or "classification"
   max_seq_length: 10
   normalize: true
   apply_filtering: false
-  use_dim_reduction: false
-  use_augmentation: false
   use_class_weights: false
-  run_preprocess: true
-  export_dataset_csv: true
-  use_dim_reduction: true
-  dim_red_method: "pca" # "pca" or "active-imu"
-  dim_red_dims_ratio: 0.4 # used by pca
+  dim_reduction:
+    enabled: true
+    method: "pca" # "pca" or "active-imu"
+    pca:
+      dims_ratio: 0.4
   use_augmentation: false
   run_preprocess: false
   export_dataset_csv: false

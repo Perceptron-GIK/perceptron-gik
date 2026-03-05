@@ -40,13 +40,13 @@ def build_config(config_data: dict) -> dict:
     experiment = config_data["experiment"]
     mode = experiment["mode"]
     mode_cfg = config_data["modes"][mode]
+    dim_reduction_cfg = copy.deepcopy(experiment["dim_reduction"])
 
     config = {
         "mode": mode,
         "max_seq_length": experiment["max_seq_length"],
-        "reduce_dim": experiment["use_dim_reduction"],
-        "dim_red_method": experiment.get("dim_red_method", "pca"),
-        "dim_red_dims_ratio": experiment.get("dim_red_dims_ratio", 0.4),
+        "dim_reduction": dim_reduction_cfg,
+        "reduce_dim": dim_reduction_cfg.get("enabled", False),
         "enable_class_weights": mode_cfg.get("use_class_weights", False),
         "run_preprocess": experiment["run_preprocess"],
         "export_dataset_csv": experiment["export_dataset_csv"],
@@ -104,16 +104,18 @@ def prepare_dataset(config: dict, data_cfg: dict) -> Path:
         if config["run_preprocess"] or not dim_red_output.exists():
             payload = torch.load(processed_path, weights_only=False)
             meta = payload.get("metadata", {})
+            dim_red_cfg = config.get("dim_reduction", {})
+            method = dim_red_cfg.get("method", "pca")
             reduce_kwargs = {
                 "data_dir": str(processed_path),
-                "method": config.get("dim_red_method", "pca"),
+                "method": method,
                 "has_left": meta.get("has_left", False),
                 "has_right": meta.get("has_right", True),
                 "normalise": True,
                 "output_path": str(dim_red_output),
             }
-            if reduce_kwargs["method"] == "pca":
-                reduce_kwargs["dims_ratio"] = config.get("dim_red_dims_ratio", 0.4)
+            if method == "pca":
+                reduce_kwargs["dims_ratio"] = dim_red_cfg.get("pca", {}).get("dims_ratio", 0.4)
             reduce_dim(**reduce_kwargs)
         dataset_path = dim_red_output
 
@@ -135,12 +137,14 @@ def apply_class_weights(config: dict, dataset_path: Path) -> dict:
 def suggest_trial_params(trial: optuna.Trial, base_config: dict) -> dict:
     cfg = copy.deepcopy(base_config)
 
-    cfg["dim_red_method"] = trial.suggest_categorical(
-        "experiment.dim_red_method", ["pca", "active-imu"]
+    cfg.setdefault("dim_reduction", {})
+    cfg["dim_reduction"]["method"] = trial.suggest_categorical(
+        "experiment.dim_reduction.method", ["pca", "active-imu"]
     )
-    if cfg["dim_red_method"] == "pca":
-        cfg["dim_red_dims_ratio"] = trial.suggest_float(
-            "experiment.dim_red_dims_ratio", 0.2, 0.8, step=0.1
+    if cfg["dim_reduction"]["method"] == "pca":
+        cfg["dim_reduction"].setdefault("pca", {})
+        cfg["dim_reduction"]["pca"]["dims_ratio"] = trial.suggest_float(
+            "experiment.dim_reduction.pca.dims_ratio", 0.2, 0.8, step=0.1
         )
 
     cfg["model_type"] = trial.suggest_categorical(
@@ -260,8 +264,9 @@ def objective(
     trial.set_user_attr("mode", cfg["mode"])
     trial.set_user_attr("model_type", cfg["model_type"])
     trial.set_user_attr("dataset_path", str(dataset_path))
-    trial.set_user_attr("dim_red_method", cfg.get("dim_red_method"))
-    trial.set_user_attr("dim_red_dims_ratio", cfg.get("dim_red_dims_ratio"))
+    dim_red_cfg = cfg.get("dim_reduction", {})
+    trial.set_user_attr("dim_red_method", dim_red_cfg.get("method"))
+    trial.set_user_attr("dim_red_dims_ratio", dim_red_cfg.get("pca", {}).get("dims_ratio"))
     trial.set_user_attr("metric_name", metric_name)
     trial.set_user_attr("best_val_loss", float(best_val_loss))
     if best_val_acc is not None:
