@@ -3,8 +3,8 @@
 // The sensor values are sent to the receiver via Bluetooth service with the MTU size of 153 bytes
 //--------------------------------------------------------------------------------------------------------------------
 
-//#define LEFT_HAND  // Define this as left hand 
-#define RIGHT_HAND  // Define this as right hand
+#define LEFT_HAND  // Define this as left hand 
+//#define RIGHT_HAND  // Define this as right hand
 #include "GIK_Hand_Config.h"  // Include the hand configuration file
 #include <ArduinoBLE.h>
 #include "Arduino_BMI270_BMM150.h"
@@ -161,9 +161,6 @@ void loop() {
   if (central) {
     Serial.print("Connected to Receiver: ");
     Serial.println(central.address());
-    digitalWrite(LEDR, HIGH);
-    digitalWrite(LEDB, HIGH);
-    digitalWrite(LEDG, LOW);
 
     // Reset sample counter on each new connection
     sample_id = 0;
@@ -174,13 +171,25 @@ void loop() {
     
     delay(500);
 
+    digitalWrite(LEDR, HIGH);  // blue light
+    digitalWrite(LEDB, LOW);
+    digitalWrite(LEDG, HIGH);
+
+
+    delay(5000); // 5 second to calibrate the imu to the default position
+
     int last_thumb = analogRead(FSR1_PIN);
     int last_index = analogRead(FSR2_PIN);
     int last_middle = analogRead(FSR3_PIN);
     int last_ring = analogRead(FSR4_PIN);
     int last_pinky = analogRead(FSR5_PIN);
     while (central.connected()) {
+
+      digitalWrite(LEDR, HIGH);
+      digitalWrite(LEDB, HIGH);
+      digitalWrite(LEDG, LOW);
   
+
       unsigned long startTime = micros();
 
 
