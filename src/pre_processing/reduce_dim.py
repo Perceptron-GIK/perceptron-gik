@@ -47,7 +47,7 @@ def reduce_dim(
         Returns: Post-DR dataset as a PyTorch tensor
     """
 
-    if inference_source:
+    if inference_source is not None:
         data = inference_source
     else:
         data = torch.load(data_dir)
