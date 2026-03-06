@@ -350,6 +350,8 @@ void loop() {
     digitalWrite(LEDB, LOW);
     digitalWrite(LEDG, HIGH);
 
+    delay(3000);
+
     calibrateIMUs(3000);
 
 
