@@ -149,14 +149,13 @@ def suggest_trial_params(trial: optuna.Trial, base_config: dict) -> dict:
     cfg = copy.deepcopy(base_config)
 
     cfg.setdefault("dim_reduction", {})
-    cfg["dim_reduction"]["method"] = trial.suggest_categorical(
-        "experiment.dim_reduction.method", ["pca", "active-imu"]
+    # Keep dim reduction fixed to PCA for compatibility with existing studies.
+    # Changing categorical choices under the same study causes dynamic-space errors.
+    cfg["dim_reduction"]["method"] = "pca"
+    cfg["dim_reduction"].setdefault("pca", {})
+    cfg["dim_reduction"]["pca"]["dims_ratio"] = trial.suggest_float(
+        "experiment.dim_reduction.pca.dims_ratio", 0.2, 0.8, step=0.1
     )
-    if cfg["dim_reduction"]["method"] == "pca":
-        cfg["dim_reduction"].setdefault("pca", {})
-        cfg["dim_reduction"]["pca"]["dims_ratio"] = trial.suggest_float(
-            "experiment.dim_reduction.pca.dims_ratio", 0.2, 0.8, step=0.1
-        )
 
     cfg["model_type"] = trial.suggest_categorical(
         "model_type", ["attention_lstm", "lstm", "gru", "transformer", "cnn", "rnn"]
@@ -206,10 +205,17 @@ def suggest_trial_params(trial: optuna.Trial, base_config: dict) -> dict:
         )
 
     if model_type == "cnn":
-        inner_cfg["kernel_sizes"] = trial.suggest_categorical(
-            "inner_model_prams.kernel_sizes",
-            [[3, 5, 7], [3, 3, 5], [5, 7, 9], [3, 5]],
+        kernel_size_options = {
+            "k357": [3, 5, 7],
+            "k335": [3, 3, 5],
+            "k579": [5, 7, 9],
+            "k35": [3, 5],
+        }
+        kernel_choice = trial.suggest_categorical(
+            "inner_model_prams.kernel_sizes_choice",
+            list(kernel_size_options.keys()),
         )
+        inner_cfg["kernel_sizes"] = kernel_size_options[kernel_choice]
 
     cfg["inner_model_prams"] = inner_cfg
 
