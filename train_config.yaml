@@ -1,5 +1,5 @@
 data:
-  data_dir: data_new_hand
+  data_dir: data_hazel_5
   keyboard_files:
     - "Keyboard_18.csv"
   left_files:
@@ -10,8 +10,10 @@ data:
 experiment:
   mode: "classification" # "coordinate" or "classification"
   max_seq_length: 19
-  normalize: false
-  apply_filtering: false
+  normalize: 
+    enabled: true
+    per_seq: true
+  apply_filtering: true
   use_class_weights: false
   dim_reduction:
     enabled: true
