@@ -230,7 +230,8 @@ def pca(data, dims_ratio, output_path, root_dir):
 
         all_samples = torch.cat([w for w in samples], dim=0)
         mean = all_samples.mean(dim=0, keepdim=True)
-        U, S, V = torch.svd(all_samples)
+        samples_centered = all_samples - mean
+        U, S, V = torch.svd(samples_centered)
         components = V[:, :dim_aft]
 
         pca_params = {
@@ -239,7 +240,7 @@ def pca(data, dims_ratio, output_path, root_dir):
         }
         torch.save(pca_params, os.path.join(root_dir, "pca_params.pt"))
 
-        output = torch.matmul(all_samples, components)
+        output = torch.matmul(samples_centered, components)
         output = output.reshape(W, R, dim_aft)
 
         data["samples"] = output
