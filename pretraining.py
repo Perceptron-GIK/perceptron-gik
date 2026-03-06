@@ -82,7 +82,7 @@ def filter_imu_data(df: pd.DataFrame) -> pd.DataFrame:
             _, a, *_ = tracker.track_attitude(data, init_tuple, R0_ref=R0_ref)
         a_p = tracker.remove_acc_drift(a, threshold=0.2, filter=True, cof=(0.1, 5))
         vel = tracker.zupt(a_p, threshold=0.2)
-        pos = tracker.track_position(a, vel)
+        pos = tracker.track_position(a_p, vel)
         
         # Update with filtered values, replacing NaN/Inf with 0
         # df[f'ax_{part}'] = np.nan_to_num(a[:, 0], nan=0.0, posinf=0.0, neginf=0.0)
