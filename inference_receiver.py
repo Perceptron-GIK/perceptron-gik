@@ -3,8 +3,9 @@ import numpy as np
 from typing import Callable, Any
 from bleak import BleakScanner, BleakClient
 
-from src.Constants.char_to_key import NUM_CLASSES, INDEX_TO_CHAR
+from src.Constants.char_to_key import NUM_CLASSES, INDEX_TO_CHAR, CHAR_TO_INDEX, FULL_COORDS
 from src.inference.sliding_window import SlidingWindow
+from src.visualisation.visualisation import get_closest_coordinate
 from inference_preprocessing import preprocess
 from ml.models.gik_model import create_model
 
@@ -186,7 +187,10 @@ def run_inference(
     model.eval()
 
     with torch.no_grad():
-        prediction = model.predict(processed_data).item()
+        if EXPERIMENT_MODE == "classification":
+            prediction = model.predict(processed_data).item()
+        else:
+            prediction = CHAR_TO_INDEX[get_closest_coordinate(model.predict_coords(processed_data), FULL_COORDS)]
 
     print(INDEX_TO_CHAR[prediction], end="")
     return prediction
