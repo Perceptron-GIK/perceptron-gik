@@ -71,7 +71,7 @@ for _ch in ALL_CHARS:
         # Fallback for any unexpected character.
         FULL_COORDS[_ch] = (5.3, 4.0)
 
-INITIAL_KEY_COORDS: Dict[str, List[float, float, float]] = { # initial guess for imu position, with z=0.0 for all keys
+INITIAL_KEY_COORDS: Dict[str, Tuple[float, float, float]] = { # initial guess for imu position, with z=0.0 for all keys
     'baseL': (0.0, 0.0, 0.0),
     'thumbL': (0.065, 0.055, 0.0),
     'indexL': (0.047, 0.088, 0.0),

@@ -91,7 +91,7 @@ def filter_imu_data(cols_list: list, sample: np.ndarray) -> torch.Tensor:
         # Initialise and track attitude
         init_tuple = tracker.initialise(data)
         if R0_ref is None and part.startswith('base'):
-            R0_ref, a, *_ = tracker.track_attitude(data, init_tuple,part)
+            R0_ref, a, *_ = tracker.track_attitude(data, init_tuple)
         else:
             _, a, *_ = tracker.track_attitude(data, init_tuple, R0_ref=R0_ref)
 
