@@ -96,12 +96,16 @@ class AlignData:
             if filter_fn is not None:
                 self.left.data = filter_fn(self.left.data)
 
-        left_win = self.left.data[-left_pointer:, :-1] if self.has_left else None
-        right_win = self.right.data[-right_pointer:, :-1] if self.has_right else None
+        # left_win = self.left.data[-left_pointer:, :-1] if self.has_left else None
+        # right_win = self.right.data[-right_pointer:, :-1] if self.has_right else None
+        left_win = self.left.data[:, :-1] if self.has_left else None
+        right_win = self.right.data[:, :-1] if self.has_right else None
 
         if self.has_left and self.has_right:
-            left_start, left_end = self.left.data[-left_pointer, -1], self.left.data[-1, -1]
-            right_start, right_end = self.right.data[-right_pointer, -1], self.right.data[-1, -1]
+            # left_start, left_end = self.left.data[-left_pointer, -1], self.left.data[-1, -1]
+            # right_start, right_end = self.right.data[-right_pointer, -1], self.right.data[-1, -1]
+            left_start, left_end = self.left.data[0, -1], self.left.data[-1, -1]
+            right_start, right_end = self.right.data[0, -1], self.right.data[-1, -1]
 
             overlap_start = max(left_start, right_start)
             overlap_end = min(left_end, right_end)

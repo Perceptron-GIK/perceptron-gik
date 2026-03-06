@@ -54,12 +54,12 @@ TRAINING_CONFIG = {
 TRAINING_CONFIG["output_logits"] = NUM_CLASSES
 
 INFERENCE_CONFIG = {
-    "max_seq_length": 30,
-    "normalize": True,
-    "apply_filtering": True,
+    "max_seq_length": 19,
+    "normalize": False,
+    "apply_filtering": False,
     "reduce_dim": False,
-    "dim_red_method": None, # Set to None if reduce_dim == False
-    "dims_ratio": 0.0 # Set to 0.0 if dims_red_method != "pca"
+    "dim_red_method": "pca", # Set to None if reduce_dim == False
+    "dims_ratio": 0.5 # Set to 0.0 if dims_red_method != "pca"
 }
 
 MODEL_PATH = os.path.join(PROJECT_ROOT, "best_model.pt")
@@ -225,6 +225,8 @@ async def process_queues(left_queue, right_queue):
         if idx is None:
             continue
         chunk = np.stack(left_win.pop_chunk(idx+1)) if triggered_hand == "left" else np.stack(right_win.pop_chunk(idx+1))
+        if chunk.shape[0] <= 2:
+            continue
         pointer = chunk.shape[0]
         timestamp = chunk[-1][-1]
         opp_idx = right_win.timestamp_matched(timestamp=timestamp) if triggered_hand == "left" else left_win.timestamp_matched(timestamp=timestamp)
@@ -237,11 +239,13 @@ async def process_queues(left_queue, right_queue):
         if triggered_hand == "left":
             left_all.append(chunk)
             right_all.append(opp_chunk)
-            prev_char = await asyncio.to_thread(run_inference, np.vstack(left_all), np.vstack(right_all), pointer, opp_pointer, prev_char)
+            # prev_char = await asyncio.to_thread(run_inference, np.vstack(tuple(left_all.data)), np.vstack(tuple(right_all.data)), pointer, opp_pointer, prev_char)
+            prev_char = await asyncio.to_thread(run_inference, chunk, opp_chunk, None, None, prev_char)
         else:
             left_all.append(opp_chunk)
             right_all.append(chunk)
-            prev_char = await asyncio.to_thread(run_inference, np.vstack(left_all), np.vstack(right_all), opp_pointer, pointer, prev_char)
+            # prev_char = await asyncio.to_thread(run_inference, np.vstack(tuple(left_all.data)), np.vstack(tuple(right_all.data)), opp_pointer, pointer, prev_char)
+            prev_char = await asyncio.to_thread(run_inference, opp_chunk, chunk, None, None, prev_char)
 
 ## ================================================== ##
 
