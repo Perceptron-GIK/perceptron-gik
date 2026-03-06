@@ -1,0 +1,97 @@
+data:
+  data_dir: "data_hazel_5_copy"
+  keyboard_files:
+    - "Keyboard_18.csv"
+  left_files:
+    - "Left_18.csv"
+  right_files: 
+    - "Right_12.csv"
+
+experiment:
+  mode: "classification" # "coordinate" or "classification"
+  max_seq_length: 19
+  normalize: false
+  apply_filtering: false
+  use_class_weights: false
+  dim_reduction:
+    enabled: true
+    method: "pca" # "pca" or "active-imu"
+    pca:
+      dims_ratio: 0.5
+  use_augmentation: false
+  run_preprocess: true
+  export_dataset_csv: true
+
+model:
+  # model_type options:
+  #   "attention_lstm" | "lstm" | "gru" | "rnn"
+  #   "transformer"
+  #   "cnn"
+  #   "glove_typing"   ← CNN-STRNet (GloveTyping paper)
+  model_type: "glove_typing"
+
+  # Shared dims / classification head
+  hidden_dim_inner_model: 512          # inner model feature width H
+  hidden_dim_classification_head: 1024  # first FC layer width after inner model
+  num_layers: 2                        # number of FC layers in classification head
+  dropout: 0.362741456039648                         # dropout in classification head FC stack
+
+  # ── inner_model_prams ────────────────────────────────────────────────────────
+  # Only keys valid for the selected model_type are used; extras are ignored.
+  #
+  # Keys by model_type:
+  #   attention_lstm : dropout, num_layers, bidirectional, num_heads
+  #   lstm           : dropout, num_layers, bidirectional
+  #   gru            : dropout, num_layers, bidirectional
+  #   rnn            : dropout, num_layers, bidirectional
+  #   transformer    : dropout, num_layers, num_heads
+  #   cnn            : dropout, kernel_sizes   (list e.g. [3,5,7])
+  #   glove_typing   : dropout, num_res_blocks, attn_reduction
+  inner_model_prams:
+    # --- recurrent (lstm / gru / rnn / attention_lstm) ---
+    # bidirectional: true
+    # num_layers: 3
+
+    # --- attention (attention_lstm / transformer) ---
+    # num_heads: 16
+
+    # --- shared dropout ---
+    dropout: 0.33580103298003944
+
+    # --- cnn ---
+    # kernel_sizes: [3, 5, 7]
+
+    # --- glove_typing (CNN-STRNet) ---
+    num_res_blocks: 3      # number of 1-D residual blocks (paper uses 3)
+    attn_reduction: 4      # bottleneck ratio in Attention-B MLP (2 / 4 / 8 / 16)
+
+train:
+  batch_size: 32
+  learning_rate: 0.0003228602342701459
+  weight_decay: 1.2417981404367497e-05
+  epochs: 300
+  early_stopping: 40
+
+modes:
+  classification:
+    use_class_weights: false
+    output_logits: "NUM_CLASSES"
+    is_one_hot: true
+    key_mapping_dict: "CHAR_TO_INDEX"
+    return_class_id: false
+    regression: false
+    loss: "FocalLoss"
+    loss_params:
+      gamma: 2.0
+
+  coordinate:
+    use_class_weights: true
+    output_logits: 2
+    is_one_hot: false
+    key_mapping_dict: "CHAR_TO_INDEX"
+    return_class_id: true
+    regression: true
+    loss: "CoordinateLossClassification"
+    loss_params:
+      h_v_ratio: 0.8
+      bias: 0.3
