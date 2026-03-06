@@ -1,14 +1,14 @@
 data:
   data_dir: data_hazel_5
   keyboard_files:
-  - Keyboard_18.csv
+    - "Keyboard_18.csv"
   left_files:
-  - Left_18.csv
+    - "Left_18.csv"
   right_files:
-  - Right_12.csv
+    - "Right_12.csv"
 
 experiment:
-  mode: classification
+  mode: "classification" # "coordinate" or "classification"
   max_seq_length: 19
   normalize: 
     enabled: true
@@ -25,7 +25,7 @@ experiment:
   export_dataset_csv: true
 
 model:
-  model_type: lstm
+  model_type: "lstm"
   hidden_dim_inner_model: 512
   hidden_dim_classification_head: 1024
   num_layers: 2
@@ -45,7 +45,7 @@ train:
 modes:
   classification:
     use_class_weights: false
-    output_logits: NUM_CLASSES
+    output_logits: "NUM_CLASSES"
     is_one_hot: true
     key_mapping_dict: CHAR_TO_INDEX
     return_class_id: false
@@ -58,7 +58,7 @@ modes:
     use_class_weights: true
     output_logits: 2
     is_one_hot: false
-    key_mapping_dict: CHAR_TO_INDEX
+    key_mapping_dict: "CHAR_TO_INDEX"
     return_class_id: true
     regression: true
     loss: CoordinateLossClassification

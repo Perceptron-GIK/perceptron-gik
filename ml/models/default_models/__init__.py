@@ -4,6 +4,7 @@ from .LSTMModel import LSTMModel
 from .GRUModel import GRUModel
 from .RNNModel import RNNModel
 from .CNNModel import CNNModel
+from .GloveTyping import CNNSTRNet
 
 __all__ = [
     "TransformerModel",
@@ -12,4 +13,5 @@ __all__ = [
     "GRUModel",
     "RNNModel",
     "CNNModel",
+    "CNNSTRNet",
 ]

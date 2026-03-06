@@ -20,10 +20,12 @@ from torch import optim
 import numpy as np
 from typing import Optional, Tuple, List, Dict, Any
 from .default_models import (
-    TransformerModel, AttentionLSTM, LSTMModel, GRUModel, RNNModel, CNNModel
+    TransformerModel, AttentionLSTM, LSTMModel, GRUModel, RNNModel, CNNModel,
+    CNNSTRNet,
 )
 from src.Constants.char_to_key import INDEX_TO_CHAR, NUM_CLASSES
 from src.pre_processing.augmentation import GIKAugmentationsPerFeature, AugmentedDataset
+from src.visualisation.visualisation import postprocess_coordinate_output
 
 class GIKModelWrapper(nn.Module):
     """
@@ -115,7 +117,22 @@ class GIKModelWrapper(nn.Module):
         """Get predicted class indices."""
         logits = self.forward(x)
         return logits.argmax(dim=-1)
-    
+
+    def predict_coords(
+            self,
+            x: torch.Tensor,
+            coord_scale=(10.0, 4.0),
+            apply_sigmoid: bool=True
+    ) -> torch.Tensor:
+        """Get predicted key coordinates"""
+        logits = self.forward(x)
+        coords = postprocess_coordinate_output(
+            y_pred=logits,
+            coord_scale=coord_scale,
+            apply_sigmoid=apply_sigmoid
+        )
+        return coords
+
     def predict_proba(self, x: torch.Tensor) -> torch.Tensor:
         """Get class probabilities."""
         logits = self.forward(x)
@@ -396,8 +413,10 @@ def create_model(
         inner_model = RNNModel(hidden_dim_inner_model, **inner_model_kwargs)
     elif model_type == 'cnn':
         inner_model = CNNModel(hidden_dim_inner_model, **inner_model_kwargs)
+    elif model_type == 'glove_typing':
+        inner_model = CNNSTRNet(hidden_dim_inner_model, **inner_model_kwargs)
     else:
-        raise ValueError(f"Unknown model type: {model_type}. Use: transformer, attention_lstm, lstm, gru, rnn, cnn")
+        raise ValueError(f"Unknown model type: {model_type}. Use: transformer, attention_lstm, lstm, gru, rnn, cnn, glove_typing")
     
     return GIKModelWrapper(inner_model, 
                            input_dim=input_dim,
