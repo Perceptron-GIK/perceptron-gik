@@ -104,7 +104,7 @@ class IMUTracker:
             P = Ft @ P @ Ft.T + Q # Update state covariance
 
             pred_a = normalise(-rotate(q) @ grv) # Predicted acceleration
-            with np.errstate(divide='ignore'):
+            with np.errstate(divide='ignore', invalid='ignore'):
                 Ra = [(acc_noise/np.linalg.norm(at))**2 + (1 - grm/np.linalg.norm(at))**2]*3 # Accelerometer noise
 
             if self.use_mag and m is not None:
@@ -189,7 +189,7 @@ class IMUTracker:
                 break
         
         drift = a_world[t_end:].mean(axis=0)
-        with np.errstate(divide='ignore'):
+        with np.errstate(divide='ignore', invalid='ignore'):
             drift_rate = drift/(t_end - t_start) # Assuming drift accumulates linearly
 
         # Remove drift during period of motion
