@@ -59,7 +59,7 @@ def _filtered_combined_col_names(base_cols: List[str]) -> List[str]:
             cols_with_pos.extend([f"x_{part}", f"y_{part}", f"z_{part}"])
     return cols_with_pos
 
-def filter_imu_data(df: pd.DataFrame) -> pd.DataFrame:
+def filter_imu_data(df: pd.DataFrame, side:str) -> pd.DataFrame:
     """Apply IMU filtering to each imu sensor data column (base, thumb, index, middle, ring, pinky) 
     and add the processed data to the dataframe. This is applied before the right and left hands are combined. """
     df = df.copy()
@@ -81,12 +81,12 @@ def filter_imu_data(df: pd.DataFrame) -> pd.DataFrame:
             _, a, *_ = tracker.track_attitude(data, init_tuple, R0_ref=R0_ref)
         a_p = tracker.remove_acc_drift(a, threshold=0.2, filter=True, cof=(0.1, 5))
         vel = tracker.zupt(a_p, threshold=0.2)
-        pos = tracker.track_position(a, vel, part)
+        pos = tracker.track_position(a_p, vel, part + "_" + side)
         
         # Update with filtered values, replacing NaN/Inf with 0
-        df[f'ax_{part}'] = np.nan_to_num(a[:, 0], nan=0.0, posinf=0.0, neginf=0.0)
-        df[f'ay_{part}'] = np.nan_to_num(a[:, 1], nan=0.0, posinf=0.0, neginf=0.0)
-        df[f'az_{part}'] = np.nan_to_num(a[:, 2], nan=0.0, posinf=0.0, neginf=0.0)
+        # df[f'ax_{part}'] = np.nan_to_num(a[:, 0], nan=0.0, posinf=0.0, neginf=0.0)
+        # df[f'ay_{part}'] = np.nan_to_num(a[:, 1], nan=0.0, posinf=0.0, neginf=0.0)
+        # df[f'az_{part}'] = np.nan_to_num(a[:, 2], nan=0.0, posinf=0.0, neginf=0.0)
         df[f'x_{part}'] = np.nan_to_num(pos[:, 0], nan=0.0, posinf=0.0, neginf=0.0)
         df[f'y_{part}'] = np.nan_to_num(pos[:, 1], nan=0.0, posinf=0.0, neginf=0.0)
         df[f'z_{part}'] = np.nan_to_num(pos[:, 2], nan=0.0, posinf=0.0, neginf=0.0)

@@ -11,7 +11,7 @@ experiment:
   mode: classification
   max_seq_length: 19
   normalize: false
-  apply_filtering: false
+  apply_filtering: true
   use_class_weights: false
   dim_reduction:
     enabled: true
