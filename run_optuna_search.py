@@ -45,9 +45,13 @@ def build_config(config_data: dict) -> dict:
     config = {
         "mode": mode,
         "max_seq_length": experiment["max_seq_length"],
+        "normalize": experiment["normalize"],
+        "apply_filtering": experiment["apply_filtering"],
         "dim_reduction": dim_reduction_cfg,
         "reduce_dim": dim_reduction_cfg.get("enabled", False),
-        "enable_class_weights": mode_cfg.get("use_class_weights", False),
+        "enable_class_weights": mode_cfg.get(
+            "use_class_weights", experiment.get("use_class_weights", False)
+        ),
         "run_preprocess": experiment["run_preprocess"],
         "export_dataset_csv": experiment["export_dataset_csv"],
         "use_augmentation": experiment["use_augmentation"],
@@ -90,8 +94,8 @@ def prepare_dataset(config: dict, data_cfg: dict) -> Path:
             right_files=data_cfg.get("right_files"),
             output_path=str(processed_path),
             max_seq_length=config["max_seq_length"],
-            normalize=True,
-            apply_filtering=True,
+            normalize=config["normalize"],
+            apply_filtering=config["apply_filtering"],
         )
     elif not processed_path.exists():
         raise FileNotFoundError(

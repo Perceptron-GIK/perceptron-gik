@@ -11,16 +11,16 @@ experiment:
   mode: "classification" # "coordinate" or "classification"
   max_seq_length: 10
   normalize: true
-  apply_filtering: false
+  apply_filtering: true
   use_class_weights: false
   dim_reduction:
     enabled: true
     method: "pca" # "pca" or "active-imu"
     pca:
-      dims_ratio: 0.4
+      dims_ratio: 0.5
   use_augmentation: false
-  run_preprocess: false
-  export_dataset_csv: false
+  run_preprocess: true
+  export_dataset_csv: true
 
 model:
   model_type: "attention_lstm"
