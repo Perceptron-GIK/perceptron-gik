@@ -51,35 +51,39 @@ class Preprocessing:
     """Align IMU and keyboard data into (samples, labels, metadata)."""
 
     @staticmethod
-    def _pad_to_length(data: np.ndarray, target_len: int) -> np.ndarray:
-        """Zero-pad or truncate sequence to target_len. Shape (target_len, features)."""
-        if data.ndim == 1:
-            data = data.reshape(-1, 1)
-        n = len(data)
-        if n == 0:
-            return np.zeros((target_len, data.shape[1]), dtype=np.float64)
-        if n >= target_len:
-            return data[:target_len].astype(np.float64)
-        out = np.zeros((target_len, data.shape[1]), dtype=np.float64)
-        out[:n] = data
-        return out
+    def _pad_df_to_length(df: pd.DataFrame, target_len: int) -> pd.DataFrame:
+        """Zero-pad or truncate dataframe rows to target_len."""
+        cols = list(df.columns)
+        arr = df.to_numpy(dtype=np.float64)
+        n_rows, n_cols = arr.shape if arr.ndim == 2 else (len(df), 0)
+
+        if n_rows >= target_len:
+            out = arr[:target_len]
+        else:
+            out = np.zeros((target_len, n_cols), dtype=np.float64)
+            if n_rows > 0:
+                out[:n_rows] = arr
+        return pd.DataFrame(out, columns=cols)
 
     @staticmethod
     def _combine_hands(
-        right: Optional[np.ndarray], left: Optional[np.ndarray], max_len: int
-    ) -> Optional[np.ndarray]:
-        has_r = right is not None and len(right) > 0
-        has_l = left is not None and len(left) > 0
-        if not has_r and not has_l:
+        right_df: Optional[pd.DataFrame], left_df: Optional[pd.DataFrame],
+        right_cols: List[str], left_cols: List[str], max_len: int,) -> Optional[pd.DataFrame]:
+        if len(left_cols) == 0 and len(right_cols) == 0:
             return None
-        if has_r and not has_l:
-            return Preprocessing._pad_to_length(right, max_len)
-        if has_l and not has_r:
-            return Preprocessing._pad_to_length(left, max_len)
-        return np.concatenate([
-            Preprocessing._pad_to_length(left, max_len),
-            Preprocessing._pad_to_length(right, max_len),
-        ], axis=1)
+
+        if left_df is None:
+            left_df = pd.DataFrame(columns=left_cols)
+        if right_df is None:
+            right_df = pd.DataFrame(columns=right_cols)
+
+        left_block = left_df.reindex(columns=left_cols, fill_value=0.0).add_suffix("_L")
+        right_block = right_df.reindex(columns=right_cols, fill_value=0.0).add_suffix("_R")
+
+        target_len = max_len if max_len != -1 else max(6, len(left_block), len(right_block))
+        left_padded = Preprocessing._pad_df_to_length(left_block, target_len)
+        right_padded = Preprocessing._pad_df_to_length(right_block, target_len)
+        return pd.concat([left_padded, right_padded], axis=1)
 
     @staticmethod
     def _char_from_key(name) -> Optional[str]:
@@ -116,7 +120,8 @@ class Preprocessing:
 
     def align(
         self,
-        max_seq_length: int = 100,
+        max_seq_length: int = 10,
+        filter_func: Optional[callable] = None,
     ) -> Tuple[List[np.ndarray], List[str], List[str], Dict[str, Any]]:
         """Returns (samples, labels, prev_labels, metadata). labels and prev_labels are characters (str). prev_labels use '' for no previous."""
         samples, labels, prev_labels = [], [], []
@@ -129,12 +134,22 @@ class Preprocessing:
         right_cols, left_cols = [], []
         if self.has_right:
             self.right.df = self.right.sorted_df
+            if filter_func is not None:
+                self.right.df = filter_func(self.right.df)
             right_cols = self.right.feature_columns
         if self.has_left:
             self.left.df = self.left.sorted_df
+            if filter_func is not None:
+                self.left.df = filter_func(self.left.df)
             left_cols = self.left.feature_columns
 
+        if len(left_cols) == 0 and len(right_cols) > 0:
+            left_cols = list(right_cols)
+        if len(right_cols) == 0 and len(left_cols) > 0:
+            right_cols = list(left_cols)
+
         skipped_chars = {}
+        combined_col_names = []
         last_char = None
         for i in range(len(key_events) - 1):
             cur_t, next_t = key_events.iloc[i]['time'], key_events.iloc[i + 1]['time']
@@ -148,19 +163,33 @@ class Preprocessing:
 
             right_win = None
             if self.has_right:
-                mask = (self.right.df['time_stamp'] >= cur_t) & (self.right.df['time_stamp'] < next_t)
-                arr = self.right.df.loc[mask, right_cols].values
-                right_win = arr if len(arr) > 0 else np.zeros((1, len(right_cols)))
+                mask = (self.right.df['time_stamp'] > cur_t) & (self.right.df['time_stamp'] <= next_t)
+                window_right_df = self.right.df.loc[mask, right_cols]
+                if len(window_right_df) > 0:
+                    right_win = window_right_df
+                else:
+                    right_win = pd.DataFrame(columns=right_cols)
 
             left_win = None
             if self.has_left:
-                mask = (self.left.df['time_stamp'] >= cur_t) & (self.left.df['time_stamp'] < next_t)
-                arr = self.left.df.loc[mask, left_cols].values
-                left_win = arr if len(arr) > 0 else np.zeros((1, len(left_cols)))
+                mask = (self.left.df['time_stamp'] > cur_t) & (self.left.df['time_stamp'] <= next_t)
+                window_left_df = self.left.df.loc[mask, left_cols]
+                if len(window_left_df) > 0:
+                    left_win = window_left_df
+                else:
+                    left_win = pd.DataFrame(columns=left_cols)
 
-            combined = self._combine_hands(right_win, left_win, max_seq_length)
+            combined = self._combine_hands(
+                right_df=right_win,
+                left_df=left_win,
+                right_cols=right_cols,
+                left_cols=left_cols,
+                max_len=max_seq_length,
+            )
             if combined is not None:
-                samples.append(combined)
+                if not combined_col_names:
+                    combined_col_names = list(combined.columns)
+                samples.append(combined.to_numpy(dtype=np.float64))
                 labels.append(next_char)
                 prev_labels.append(prev_label)
                 last_char = next_char
@@ -169,15 +198,15 @@ class Preprocessing:
             print(f"Skipped characters : {skipped_chars}")
 
         n_right, n_left = len(right_cols), len(left_cols)
-        feat_dim = n_right + n_left
+        feat_dim = len(combined_col_names)
         metadata = {
             'num_samples': len(samples),
             'num_hands': (1 if self.has_right else 0) + (1 if self.has_left else 0),
             'has_right': self.has_right,
             'has_left': self.has_left,
-            'combined_col_names' : [f'{col}L' for col in left_cols ] + [f'{col}R' for col in right_cols ],
+            'combined_col_names': combined_col_names,
             'feat_dim': feat_dim,
-            'features_per_hand': n_right or n_left,
+            'features_per_hand': max(n_right, n_left),
             'max_seq_length': max_seq_length,
             'skipped_chars': skipped_chars,
         }
