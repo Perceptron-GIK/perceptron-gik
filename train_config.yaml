@@ -1,5 +1,5 @@
 data:
-  data_dir: "data"
+  data_dir: data_new_hand
   keyboard_files:
     - "Keyboard_18.csv"
   left_files:
@@ -45,10 +45,10 @@ modes:
     use_class_weights: false
     output_logits: "NUM_CLASSES"
     is_one_hot: true
-    key_mapping_dict: "CHAR_TO_INDEX"
+    key_mapping_dict: CHAR_TO_INDEX
     return_class_id: false
     regression: false
-    loss: "FocalLoss"
+    loss: FocalLoss
     loss_params:
       gamma: 2.5
 
@@ -59,7 +59,9 @@ modes:
     key_mapping_dict: "CHAR_TO_INDEX"
     return_class_id: true
     regression: true
-    loss: "CoordinateLossClassification"
+    loss: CoordinateLossClassification
     loss_params:
       h_v_ratio: 0.8
       bias: 0.3
+ 
+ 

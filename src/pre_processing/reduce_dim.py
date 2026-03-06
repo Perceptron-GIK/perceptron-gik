@@ -125,6 +125,7 @@ def active_imu_only(data_dir, inference_source, has_left, has_right, normalize, 
     fsr_data = samples[:, :, fsr_indices] # (W, R, C), extract the columns with FSR data
     active_finger = (fsr_data != 0).sum(dim=1).argmax(dim=1) # (W, 1), identify the active finger which is an index from 0-9
     cols_to_keep = imu6_table[active_finger]  # (W, 6), active finger ax..gz
+    cols_to_keep = imu6_table[active_finger]  # (W, 6), active finger ax..gz
     cols_to_keep = cols_to_keep.unsqueeze(1).expand(-1, R, -1) # (W, R, 6), reshape to match data dimensions
     output = torch.gather(samples, dim=2, index=cols_to_keep) # (W, R, 6), gather the active IMU data from each window
     
@@ -140,6 +141,14 @@ def active_imu_only(data_dir, inference_source, has_left, has_right, normalize, 
     output = torch.cat([output, base_data], dim=2)
 
     # Insert predicted positions for active finger IMU
+    if has_left and has_right:
+        # Keep behavior of returning both-hand positions for corresponding finger family.
+        active_pos = pos3_table[active_finger]
+        paired_pos = pos3_table[opposite_hand_idx[active_finger]]
+        pos_indices = torch.cat([active_pos, paired_pos], dim=1)  # (W, 6)
+    else:
+        pos_indices = pos3_table[active_finger]  # (W, 3)
+
     if has_left and has_right:
         # Keep behavior of returning both-hand positions for corresponding finger family.
         active_pos = pos3_table[active_finger]
@@ -204,7 +213,7 @@ def active_imu_only(data_dir, inference_source, has_left, has_right, normalize, 
     else:
         mean = std = None
 
-    if not inference_source:
+    if inference_source is not None:
         data["samples"] = output
         data["metadata"]["feat_dim"] = output.shape[2]
         data["normalize"] = normalize
