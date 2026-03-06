@@ -87,13 +87,13 @@ def add_prev_char(data, prev_char, mode):
         if mode == "classification":
             space = F.one_hot(torch.tensor([CHAR_TO_INDEX[" "]]), num_classes=NUM_CLASSES).float().unsqueeze(1).repeat(1, nRows, 1)
         else:
-            space = torch.tensor(FULL_COORDS[" "]).float().unsqueeze(1).repeat(1, nRows, 1)
+            space = torch.tensor([FULL_COORDS[" "]]).float().unsqueeze(1).repeat(1, nRows, 1)
         return torch.cat((data, space), dim=2)
     else:
         if mode == "classification":
             prev_char = F.one_hot(torch.tensor([prev_char]), num_classes=NUM_CLASSES).float().unsqueeze(1).repeat(1, nRows, 1)
         else:
-            prev_char = torch.tensor(FULL_COORDS[INDEX_TO_CHAR[prev_char]]).float().unsqueeze(1).repeat(1, nRows, 1)
+            prev_char = torch.tensor([FULL_COORDS[INDEX_TO_CHAR[prev_char]]]).float().unsqueeze(1).repeat(1, nRows, 1)
         return torch.cat((data, prev_char), dim=2)
 
 def preprocess(
