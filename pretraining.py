@@ -42,8 +42,7 @@ from src.Constants.char_to_key import CHAR_TO_INDEX
 
 
 IMU_SAMPLING_RATE = 28.57
-IMU_PARTS = ['baseL', 'thumbL', 'indexL', 'middleL', 'ringL', 'pinkyL',
-             'baseR', 'thumbR', 'indexR', 'middleR', 'ringR', 'pinkyR']
+IMU_PARTS = ['base', 'thumb', 'index', 'middle', 'ring', 'pinky']
 
 
 def _filtered_combined_col_names(base_cols: List[str]) -> List[str]:
@@ -60,72 +59,39 @@ def _filtered_combined_col_names(base_cols: List[str]) -> List[str]:
             cols_with_pos.extend([f"x_{part}", f"y_{part}", f"z_{part}"])
     return cols_with_pos
 
-def filter_imu_data(cols_list: list, sample: np.ndarray) -> torch.Tensor:
-    """Apply IMU filtering to each IMU sensor data column and return processed sample.
-
-    The returned sample is ordered as [part accel, gyro, pos, fsr] and has shape
-    (time_steps, features).
-    """
-    # sample: (T, D)
-    df = pd.DataFrame(sample, columns=cols_list)
+def filter_imu_data(df: pd.DataFrame) -> pd.DataFrame:
+    """Apply IMU filtering to each imu sensor data column (base, thumb, index, middle, ring, pinky) 
+    and add the processed data to the dataframe. This is applied before the right and left hands are combined. """
+    df = df.copy()
+    timestamps = df['time_stamp'].values
+    time_rel = timestamps - timestamps[0]
+    
     tracker = IMUTracker(sr=IMU_SAMPLING_RATE, use_mag=False)
-
-    T = sample.shape[0]
-    time_rel = np.arange(T) / IMU_SAMPLING_RATE
-
-    new_sample = []  # list of 1D arrays of length T
-    R0_ref = None
-
+    
     for part in IMU_PARTS:
-        cols = [
-            f'ax_{part}', f'ay_{part}', f'az_{part}',
-            f'gx_{part}', f'gy_{part}', f'gz_{part}',
-        ]
-        # Skip if any required column is missing
+        cols = [f'ax_{part}', f'ay_{part}', f'az_{part}', f'gx_{part}', f'gy_{part}', f'gz_{part}']
         if not all(c in df.columns for c in cols):
             continue
-
-        # Build data matrix: (T, 1 + 6)
-        data = np.column_stack([time_rel, df[cols].to_numpy()])
-
-        # Initialise and track attitude
+        data = np.column_stack([time_rel, df[cols].values])
+        
         init_tuple = tracker.initialise(data)
-        if R0_ref is None and part.startswith('base'):
+        if part == 'base': # Use the base IMU as a reference for the keyboard frame
             R0_ref, a, *_ = tracker.track_attitude(data, init_tuple)
         else:
             _, a, *_ = tracker.track_attitude(data, init_tuple, R0_ref=R0_ref)
-
-        # Filter acceleration, compute vel and pos
         a_p = tracker.remove_acc_drift(a, threshold=0.2, filter=True, cof=(0.1, 5))
         vel = tracker.zupt(a_p, threshold=0.2)
-        pos = tracker.track_position(a_p, vel, part)
-
-        # Accel (3), gyro (3), pos (3): all 1D arrays of length T
-        accel_streams = [
-            np.nan_to_num(a_p[:, i], nan=0.0, posinf=0.0, neginf=0.0)
-            for i in range(3)
-        ]
-        gyro_streams = [
-            df[f'gx_{part}'].to_numpy(),
-            df[f'gy_{part}'].to_numpy(),
-            df[f'gz_{part}'].to_numpy(),
-        ]
-        pos_streams = [
-            np.nan_to_num(pos[:, i] * 100, nan=0.0, posinf=0.0, neginf=0.0) # change to cm
-            for i in range(3)
-        ]
-
-        new_sample.extend(accel_streams)
-        new_sample.extend(gyro_streams)
-        new_sample.extend(pos_streams)
-
-        fsr_col = f'f_{part}'
-        if fsr_col in cols_list:
-            new_sample.append(df[fsr_col].to_numpy())
-
-    # Stack all features into (T, F)
-    features = np.stack(new_sample, axis=1)
-    return torch.tensor(features, dtype=torch.float32)
+        pos = tracker.track_position(a, vel, part)
+        
+        # Update with filtered values, replacing NaN/Inf with 0
+        df[f'ax_{part}'] = np.nan_to_num(a[:, 0], nan=0.0, posinf=0.0, neginf=0.0)
+        df[f'ay_{part}'] = np.nan_to_num(a[:, 1], nan=0.0, posinf=0.0, neginf=0.0)
+        df[f'az_{part}'] = np.nan_to_num(a[:, 2], nan=0.0, posinf=0.0, neginf=0.0)
+        df[f'x_{part}'] = np.nan_to_num(pos[:, 0], nan=0.0, posinf=0.0, neginf=0.0)
+        df[f'y_{part}'] = np.nan_to_num(pos[:, 1], nan=0.0, posinf=0.0, neginf=0.0)
+        df[f'z_{part}'] = np.nan_to_num(pos[:, 2], nan=0.0, posinf=0.0, neginf=0.0)
+    
+    return df
 
 def preprocess_multiple_sources(
     data_dir: str,
@@ -133,7 +99,7 @@ def preprocess_multiple_sources(
     keyboard_files: List[str],
     left_files: Optional[List[str]] = None,
     right_files: Optional[List[str]] = None,
-    max_seq_length: int = 100,
+    max_seq_length: int = 10,
     normalize: bool = True,
     apply_filtering: bool = True
 ) -> Dict[str, Any]:
@@ -190,6 +156,7 @@ def preprocess_multiple_sources(
         
         samples, labels, prev_labels, metadata = preprocessor.align(
             max_seq_length=max_seq_length,
+            filter_func=filter_imu_data if apply_filtering else None
         )
 
         all_samples.extend(samples)
@@ -209,11 +176,7 @@ def preprocess_multiple_sources(
 
     combined_cols = list(metadata['combined_col_names'])
 
-    if apply_filtering:
-        samples_tensor = [filter_imu_data(metadata['combined_col_names'], s) for s in all_samples]
-        combined_cols = _filtered_combined_col_names(combined_cols)
-    else:
-        samples_tensor = [torch.tensor(s, dtype=torch.float32) for s in all_samples]
+    samples_tensor = [torch.tensor(s, dtype=torch.float32) for s in all_samples]
 
     dont_normalise = [
         i for i, col in enumerate(combined_cols)
@@ -274,6 +237,19 @@ def preprocess_multiple_sources(
         samples_tensor = norm_samples
     else:
         mean = std = None
+
+    if samples_tensor:
+        seq_lengths = [int(s.shape[0]) for s in samples_tensor]
+        max_len_for_padding = max(seq_lengths)
+
+        if len(set(seq_lengths)) > 1:
+            padded_samples = []
+            for s in samples_tensor:
+                pad_len = max_len_for_padding - s.shape[0]
+                if pad_len > 0:
+                    s = torch.nn.functional.pad(s, (0, 0, 0, pad_len), mode='constant', value=0.0)
+                padded_samples.append(s)
+            samples_tensor = padded_samples
 
     samples_stacked = torch.stack(samples_tensor) if samples_tensor else torch.tensor([])
     effective_feat_dim = len(combined_cols)
