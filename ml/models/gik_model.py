@@ -20,7 +20,8 @@ from torch import optim
 import numpy as np
 from typing import Optional, Tuple, List, Dict, Any
 from .default_models import (
-    TransformerModel, AttentionLSTM, LSTMModel, GRUModel, RNNModel, CNNModel
+    TransformerModel, AttentionLSTM, LSTMModel, GRUModel, RNNModel, CNNModel,
+    CNNSTRNet,
 )
 from src.Constants.char_to_key import INDEX_TO_CHAR, NUM_CLASSES
 from src.pre_processing.augmentation import GIKAugmentationsPerFeature, AugmentedDataset
@@ -412,8 +413,10 @@ def create_model(
         inner_model = RNNModel(hidden_dim_inner_model, **inner_model_kwargs)
     elif model_type == 'cnn':
         inner_model = CNNModel(hidden_dim_inner_model, **inner_model_kwargs)
+    elif model_type == 'glove_typing':
+        inner_model = CNNSTRNet(hidden_dim_inner_model, **inner_model_kwargs)
     else:
-        raise ValueError(f"Unknown model type: {model_type}. Use: transformer, attention_lstm, lstm, gru, rnn, cnn")
+        raise ValueError(f"Unknown model type: {model_type}. Use: transformer, attention_lstm, lstm, gru, rnn, cnn, glove_typing")
     
     return GIKModelWrapper(inner_model, 
                            input_dim=input_dim,
