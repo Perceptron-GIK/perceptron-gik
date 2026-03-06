@@ -25,7 +25,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from pretraining import preprocess_multiple_sources, load_preprocessed_dataset, get_class_weights
+from pretraining import (
+    preprocess_multiple_sources,
+    load_preprocessed_dataset,
+    get_class_weights,
+    export_dataset_to_csv,
+)
 from src.pre_processing.reduce_dim import reduce_dim
 from src.Constants.char_to_key import CHAR_TO_INDEX, FULL_COORDS, NUM_CLASSES
 from ml.models.gik_model import create_model_auto_input_dim, GIKTrainer
@@ -97,6 +102,8 @@ def prepare_dataset(config: dict, data_cfg: dict) -> Path:
             normalize=config["normalize"],
             apply_filtering=config["apply_filtering"],
         )
+        if config.get("export_dataset_csv", False):
+            export_dataset_to_csv(str(processed_path), output_dir=str(data_dir))
     elif not processed_path.exists():
         raise FileNotFoundError(
             f"run_preprocess is false, but dataset not found: {processed_path}"
@@ -154,6 +161,20 @@ def suggest_trial_params(trial: optuna.Trial, base_config: dict) -> dict:
     cfg["model_type"] = trial.suggest_categorical(
         "model_type", ["attention_lstm", "lstm", "gru", "transformer", "cnn", "rnn"]
     )
+    cfg["normalize"] = trial.suggest_categorical("experiment.normalize", [True, False])
+    cfg["apply_filtering"] = trial.suggest_categorical(
+        "experiment.apply_filtering", [True, False]
+    )
+    cfg["max_seq_length"] = trial.suggest_categorical(
+        "experiment.max_seq_length", [-1] + list(range(10, 21))
+    )
+    preprocess_required = any(
+        cfg[key] != base_config.get(key)
+        for key in ("normalize", "apply_filtering", "max_seq_length")
+    )
+    if preprocess_required:
+        cfg["run_preprocess"] = True
+        cfg["export_dataset_csv"] = True
     cfg["learning_rate"] = trial.suggest_float("learning_rate", 1e-4, 5e-3, log=True)
     cfg["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True)
     cfg["batch_size"] = trial.suggest_categorical("batch_size", [16, 32, 64, 128])
@@ -167,10 +188,11 @@ def suggest_trial_params(trial: optuna.Trial, base_config: dict) -> dict:
     cfg["num_layers"] = trial.suggest_int("num_layers", 1, 5)
 
     model_type = cfg["model_type"]
-    inner_cfg = copy.deepcopy(cfg.get("inner_model_prams", {}))
-    inner_cfg["dropout"] = trial.suggest_float("inner_model_prams.dropout", 0.1, 0.8)
+    # Build model-specific kwargs from scratch so incompatible keys from a previous
+    # model family (e.g., num_heads) are never forwarded accidentally.
+    inner_cfg = {"dropout": trial.suggest_float("inner_model_prams.dropout", 0.1, 0.8)}
 
-    if model_type in ["lstm", "gru", "attention_lstm", "transformer", "rnn"]:
+    if model_type in ["lstm", "gru", "attention_lstm", "rnn", "transformer"]:
         inner_cfg["num_layers"] = trial.suggest_int("inner_model_prams.num_layers", 1, 5)
 
     if model_type in ["lstm", "gru", "attention_lstm", "rnn"]:
@@ -267,6 +289,9 @@ def objective(
 
     trial.set_user_attr("mode", cfg["mode"])
     trial.set_user_attr("model_type", cfg["model_type"])
+    trial.set_user_attr("normalize", cfg["normalize"])
+    trial.set_user_attr("apply_filtering", cfg["apply_filtering"])
+    trial.set_user_attr("max_seq_length", cfg["max_seq_length"])
     trial.set_user_attr("dataset_path", str(dataset_path))
     dim_red_cfg = cfg.get("dim_reduction", {})
     trial.set_user_attr("dim_red_method", dim_red_cfg.get("method"))
@@ -288,6 +313,9 @@ def _print_trial_progress(study: optuna.Study, trial: optuna.trial.FrozenTrial):
     mode = trial.user_attrs.get("mode", "?")
     dim_method = trial.user_attrs.get("dim_red_method", "?")
     dim_ratio = trial.user_attrs.get("dim_red_dims_ratio", "?")
+    normalize = trial.user_attrs.get("normalize", "?")
+    apply_filtering = trial.user_attrs.get("apply_filtering", "?")
+    max_seq_length = trial.user_attrs.get("max_seq_length", "?")
 
     if study.best_trial is not None and study.best_trial.value is not None:
         best_str = f"{float(study.best_trial.value):.6f}"
@@ -301,7 +329,9 @@ def _print_trial_progress(study: optuna.Study, trial: optuna.trial.FrozenTrial):
         f"value={value_str} ({metric}) "
         f"best={best_str} (trial {best_trial_num}) "
         f"mode={mode} model={model_type} "
-        f"dim_red={dim_method} ratio={dim_ratio}",
+        f"dim_red={dim_method} ratio={dim_ratio} "
+        f"normalize={normalize} filtering={apply_filtering} "
+        f"max_seq_length={max_seq_length}",
         flush=True,
     )
 

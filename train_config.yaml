@@ -11,7 +11,7 @@ experiment:
   mode: "classification" # "coordinate" or "classification"
   max_seq_length: 10
   normalize: true
-  apply_filtering: true
+  apply_filtering: false
   use_class_weights: false
   dim_reduction:
     enabled: true
@@ -19,8 +19,8 @@ experiment:
     pca:
       dims_ratio: 0.5
   use_augmentation: false
-  run_preprocess: true
-  export_dataset_csv: true
+  run_preprocess: false
+  export_dataset_csv: false
 
 model:
   model_type: "attention_lstm"
