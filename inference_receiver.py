@@ -41,6 +41,9 @@ TRAINING_CONFIG_PATH = os.path.join(PROJECT_ROOT, "train_config.yaml")
 with open(TRAINING_CONFIG_PATH, "r", encoding="utf-8") as f:
     config_data = yaml.safe_load(f)
 
+TRAINING_DATA_DIR = config_data["data"]["data_dir"]
+PROCESSED_TRAINING_DATA = os.path.join(TRAINING_DATA_DIR, "processed_dataset.pt")
+
 EXPERIMENT_MODE = config_data["experiment"]["mode"]
 MODE_CONFIG = config_data["modes"][EXPERIMENT_MODE]
 
@@ -161,7 +164,8 @@ def run_inference(
         apply_dim_reduction = INFERENCE_CONFIG["reduce_dim"],
         dim_red_method = INFERENCE_CONFIG["dim_red_method"],
         dims_ratio = INFERENCE_CONFIG["dims_ratio"],
-        root_dir = PROJECT_ROOT
+        root_dir = PROJECT_ROOT,
+        training_dataset = PROCESSED_TRAINING_DATA
     )
 
     input_dim = processed_data.shape[2]

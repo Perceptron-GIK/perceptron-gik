@@ -109,7 +109,8 @@ def preprocess(
     apply_dim_reduction: bool=True,
     dim_red_method: Optional[str]="pca",
     dims_ratio: Optional[float]=0.4,
-    root_dir: Optional[str]=None
+    root_dir: Optional[str]=None,
+    training_dataset: str = None
 ):
     '''
     Preprocess a single window of data
@@ -127,6 +128,8 @@ def preprocess(
         apply_dim_reduction: Whether to apply dimensionality reduction
         dim_red_method: Method of dimensionality reduction (if applicable)
         dims_ratio: Proportion of dimensions to keep (for PCA only)
+        root_dir: Project root containing PCA params file
+        training_dataset: File path to the processed dataset from training 
     
     Returns:
         A single PyTorch tensor of processed data from both hands
@@ -193,7 +196,8 @@ def preprocess(
 
     if apply_dim_reduction:
         output = reduce_dim(
-            data_source=samples,
+            data_dir=training_dataset,
+            inference_source=samples,
             method=dim_red_method,
             has_left=metadata["has_left"],
             has_right=metadata["has_right"],
