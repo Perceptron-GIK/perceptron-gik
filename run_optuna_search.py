@@ -158,7 +158,8 @@ def suggest_trial_params(trial: optuna.Trial, base_config: dict) -> dict:
     )
 
     cfg["model_type"] = trial.suggest_categorical(
-        "model_type", ["attention_lstm", "lstm", "gru", "transformer", "cnn", "rnn"]
+        # "model_type", ["attention_lstm", "lstm", "gru", "transformer", "cnn", "rnn", "glove_typing"]
+        "model_type", ["attention_lstm", "lstm", "gru", "transformer", "cnn", "rnn",]
     )
     cfg["normalize"] = trial.suggest_categorical("experiment.normalize", [True, False])
     cfg["apply_filtering"] = trial.suggest_categorical(
@@ -216,6 +217,14 @@ def suggest_trial_params(trial: optuna.Trial, base_config: dict) -> dict:
             list(kernel_size_options.keys()),
         )
         inner_cfg["kernel_sizes"] = kernel_size_options[kernel_choice]
+
+    # if model_type == "glove_typing":
+    #     inner_cfg["num_res_blocks"] = trial.suggest_int(
+    #         "inner_model_prams.num_res_blocks", 1, 5
+    #     )
+    #     inner_cfg["attn_reduction"] = trial.suggest_categorical(
+    #         "inner_model_prams.attn_reduction", [2, 4, 8, 16]
+    #     )
 
     cfg["inner_model_prams"] = inner_cfg
 
