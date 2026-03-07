@@ -83,7 +83,7 @@ def add_prev_char(data, prev_char, mode):
         Data with prev_char added as a feature
     '''
     nRows = data.shape[1]
-    if not prev_char:
+    if prev_char is None:
         if mode == "classification":
             space = F.one_hot(torch.tensor([CHAR_TO_INDEX[" "]]), num_classes=NUM_CLASSES).float().unsqueeze(1).repeat(1, nRows, 1)
         else:
@@ -110,7 +110,8 @@ def preprocess(
     dim_red_method: Optional[str]="pca",
     dims_ratio: Optional[float]=0.4,
     root_dir: Optional[str]=None,
-    training_dataset: str = None
+    training_dataset: str = None,
+    append_prev_char: bool = True,
 ):
     '''
     Preprocess a single window of data
@@ -205,6 +206,6 @@ def preprocess(
             dims_ratio=dims_ratio,
             root_dir=root_dir
         )
-        return add_prev_char(output, prev_char, mode)
+        return add_prev_char(output, prev_char, mode) if append_prev_char else output
     else:
-        return add_prev_char(samples, prev_char, mode)
+        return add_prev_char(samples, prev_char, mode) if append_prev_char else samples

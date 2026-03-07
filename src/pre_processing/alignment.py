@@ -122,8 +122,12 @@ class Preprocessing:
         self,
         max_seq_length: int = 10,
         filter_func: Optional[callable] = None,
+        context_prev_windows: int = 0,
+        context_future_windows: int = 0,
     ) -> Tuple[List[np.ndarray], List[str], List[str], Dict[str, Any]]:
         """Returns (samples, labels, prev_labels, metadata). labels and prev_labels are characters (str). prev_labels use '' for no previous."""
+        context_prev_windows = max(0, int(context_prev_windows))
+        context_future_windows = max(0, int(context_future_windows))
         samples, labels, prev_labels = [], [], []
         key_events = (
             self.keyboard.df[self.keyboard.df['event_type'] == 'down']
@@ -152,7 +156,10 @@ class Preprocessing:
         combined_col_names = []
         last_char = None
         for i in range(len(key_events) - 1):
-            cur_t, next_t = key_events.iloc[i]['time'], key_events.iloc[i + 1]['time']
+            start_evt_idx = max(0, i - context_prev_windows)
+            end_evt_idx = min(len(key_events) - 1, (i + 1) + context_future_windows)
+            context_start_t = key_events.iloc[start_evt_idx]['time']
+            context_end_t = key_events.iloc[end_evt_idx]['time']
             next_char = self._char_from_key(key_events.iloc[i + 1]['name'])
             if next_char is None or next_char not in CHAR_TO_INDEX:
                 key = '<nan>' if next_char is None else next_char
@@ -163,7 +170,7 @@ class Preprocessing:
 
             right_win = None
             if self.has_right:
-                mask = (self.right.df['time_stamp'] > cur_t) & (self.right.df['time_stamp'] <= next_t)
+                mask = (self.right.df['time_stamp'] > context_start_t) & (self.right.df['time_stamp'] <= context_end_t)
                 window_right_df = self.right.df.loc[mask, right_cols]
                 if len(window_right_df) > 0:
                     right_win = window_right_df
@@ -172,7 +179,7 @@ class Preprocessing:
 
             left_win = None
             if self.has_left:
-                mask = (self.left.df['time_stamp'] > cur_t) & (self.left.df['time_stamp'] <= next_t)
+                mask = (self.left.df['time_stamp'] > context_start_t) & (self.left.df['time_stamp'] <= context_end_t)
                 window_left_df = self.left.df.loc[mask, left_cols]
                 if len(window_left_df) > 0:
                     left_win = window_left_df
@@ -209,6 +216,8 @@ class Preprocessing:
             'features_per_hand': max(n_right, n_left),
             'max_seq_length': max_seq_length,
             'skipped_chars': skipped_chars,
+            'context_prev_windows': context_prev_windows,
+            'context_future_windows': context_future_windows,
         }
         return samples, labels, prev_labels, metadata
 

@@ -9,6 +9,10 @@ data:
 
 experiment:
   mode: "classification" # "coordinate" or "classification"
+  alignment_context:
+    prev_windows: 0
+    future_windows: 0
+  append_prev_char_feature: true
   max_seq_length: 19
   normalize: 
     enabled: true
