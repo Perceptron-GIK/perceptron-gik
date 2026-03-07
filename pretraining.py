@@ -24,7 +24,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-from sqlalchemy.testing.suite.test_reflection import metadata
 from torch.utils.data import Dataset
 from typing import Optional, Tuple, List, Dict, Any, Union
 from collections import Counter
@@ -102,6 +101,7 @@ def preprocess_multiple_sources(
     right_files: Optional[List[str]] = None,
     max_seq_length: int = 10,
     normalize: bool = True,
+    per_sample_normalizaion: bool = False,
     apply_filtering: bool = True
 ) -> Dict[str, Any]:
     """
@@ -188,13 +188,32 @@ def preprocess_multiple_sources(
         F = samples_tensor[0].shape[1]
 
         valid_rows = []
+        per_sample_x_min = []
+        per_sample_range = []
+        per_sample_mean = []
+        per_sample_std = []
         for s in samples_tensor:
-            s = torch.nan_to_num(s, nan=0.0, posinf=0.0, neginf=0.0) 
+            s = torch.nan_to_num(s, nan=0.0, posinf=0.0, neginf=0.0)
             mask_valid = (s.abs().sum(dim=1) > 0)
             if mask_valid.any():
-                valid_rows.append(s[mask_valid])
-        
-        if valid_rows:
+                rows = s[mask_valid]
+                valid_rows.append(rows)
+                x_min_i = rows.amin(dim=0)
+                x_max_i = rows.amax(dim=0)
+                range_i = x_max_i - x_min_i
+                range_i[range_i == 0] = 1.0
+                per_sample_x_min.append(x_min_i)
+                per_sample_range.append(range_i)
+                per_sample_mean.append(rows.mean(dim=0))
+                per_sample_std.append(rows.std(dim=0))
+            else:
+                # Keep per-sample stats aligned with samples_tensor indices.
+                per_sample_x_min.append(torch.zeros(F))
+                per_sample_range.append(torch.ones(F))
+                per_sample_mean.append(torch.zeros(F))
+                per_sample_std.append(torch.zeros(F))
+
+        if valid_rows and not per_sample_normalizaion:
             all_data = torch.cat(valid_rows, dim=0)  
             # per-feature min, max for non-FSR features
             x_min = all_data.amin(dim=0)              # [F]
@@ -205,6 +224,12 @@ def preprocess_multiple_sources(
             # avoid zero range
             range_ = x_max - x_min
             range_[range_ == 0] = 1.0
+        elif valid_rows:
+            x_min = per_sample_x_min
+            range_ = per_sample_range
+            mean = torch.stack(per_sample_mean).mean(dim=0)
+            std = torch.stack(per_sample_std).mean(dim=0)
+            
         else:
             x_min = torch.zeros(F)
             range_ = torch.ones(F)
@@ -216,7 +241,7 @@ def preprocess_multiple_sources(
         fsr = ~mask
 
         norm_samples = []
-        for s in samples_tensor:
+        for i,s in enumerate(samples_tensor):
             s = torch.nan_to_num(s, nan=0.0, posinf=0.0, neginf=0.0)
             s_norm = s.clone()
             mask_valid = (s.abs().sum(dim=1) > 0)
@@ -226,9 +251,14 @@ def preprocess_multiple_sources(
             # formula: 2 * (x - min)/(max - min) - 1
             if len(valid_idx) > 0:
                 # normalize non-FSR
-                s_norm[valid_idx[:, None], nonfsr] = 2.0 * (
-                    (s[valid_idx[:, None], nonfsr] - x_min[nonfsr]) / range_[nonfsr]
-                ) - 1.0
+                if not per_sample_normalizaion:
+                    s_norm[valid_idx[:, None], nonfsr] = 2.0 * (
+                        (s[valid_idx[:, None], nonfsr] - x_min[nonfsr]) / range_[nonfsr]
+                    ) - 1.0
+                else:
+                    s_norm[valid_idx[:, None], nonfsr] = 2.0 * (
+                        (s[valid_idx[:, None], nonfsr] - x_min[i][nonfsr]) / range_[i][nonfsr]
+                    ) - 1.0
 
                 # copy FSR as-is
                 s_norm[valid_idx[:, None], fsr] = s[valid_idx[:, None], fsr]
