@@ -50,7 +50,8 @@ def build_config(config_data: dict) -> dict:
     config = {
         "mode": mode,
         "max_seq_length": experiment["max_seq_length"],
-        "normalize": experiment["normalize"],
+        "normalize": experiment["normalize"]["enabled"],
+        "normalize_per_seq": experiment["normalize"]["per_seq"],
         "apply_filtering": experiment["apply_filtering"],
         "dim_reduction": dim_reduction_cfg,
         "reduce_dim": dim_reduction_cfg.get("enabled", False),
@@ -100,6 +101,7 @@ def prepare_dataset(config: dict, data_cfg: dict) -> Path:
             output_path=str(processed_path),
             max_seq_length=config["max_seq_length"],
             normalize=config["normalize"],
+            per_sample_normalizaion = config["normalize_per_seq"]
             apply_filtering=config["apply_filtering"],
         )
         if config.get("export_dataset_csv", False):
@@ -159,31 +161,32 @@ def suggest_trial_params(trial: optuna.Trial, base_config: dict) -> dict:
 
     cfg["model_type"] = trial.suggest_categorical(
         # "model_type", ["attention_lstm", "lstm", "gru", "transformer", "cnn", "rnn", "glove_typing"]
-        "model_type", ["attention_lstm", "lstm", "gru", "transformer", "cnn", "rnn",]
+        "model_type", ["glove_typing"]
     )
-    cfg["normalize"] = trial.suggest_categorical("experiment.normalize", [True, False])
+    # cfg["normalize"] = trial.suggest_categorical("experiment.normalize", [True, False])
     cfg["apply_filtering"] = trial.suggest_categorical(
         "experiment.apply_filtering", [True, False]
     )
     cfg["max_seq_length"] = trial.suggest_categorical(
-        "experiment.max_seq_length", [-1] + list(range(10, 21))
+        "experiment.max_seq_length", [-1] + list(range(6, 21))
     )
     preprocess_required = any(
         cfg[key] != base_config.get(key)
-        for key in ("normalize", "apply_filtering", "max_seq_length")
+        # for key in ("normalize", "apply_filtering", "max_seq_length")
+        for key in ("apply_filtering", "max_seq_length")
     )
     if preprocess_required:
         cfg["run_preprocess"] = True
         cfg["export_dataset_csv"] = True
-    cfg["learning_rate"] = trial.suggest_float("learning_rate", 1e-4, 5e-3, log=True)
+    cfg["learning_rate"] = trial.suggest_float("learning_rate", 1e-6, 5e-2, log=True)
     cfg["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True)
-    cfg["batch_size"] = trial.suggest_categorical("batch_size", [16, 32, 64, 128])
+    cfg["batch_size"] = trial.suggest_categorical("batch_size", [16, 32, 64, 128, 256])
     cfg["dropout"] = trial.suggest_float("dropout", 0.1, 0.8)
     cfg["hidden_dim_inner_model"] = trial.suggest_categorical(
-        "hidden_dim_inner_model", [64, 96, 128, 192, 256, 512, 1024]
+        "hidden_dim_inner_model", [64, 96, 128, 192, 256, 512, 1024, 2048, 4096]
     )
     cfg["hidden_dim_classification_head"] = trial.suggest_categorical(
-        "hidden_dim_classification_head", [64, 128, 256, 512, 1024]
+        "hidden_dim_classification_head", [64, 128, 256, 512, 1024, 2048, 4096]
     )
     cfg["num_layers"] = trial.suggest_int("num_layers", 1, 5)
 
@@ -218,13 +221,13 @@ def suggest_trial_params(trial: optuna.Trial, base_config: dict) -> dict:
         )
         inner_cfg["kernel_sizes"] = kernel_size_options[kernel_choice]
 
-    # if model_type == "glove_typing":
-    #     inner_cfg["num_res_blocks"] = trial.suggest_int(
-    #         "inner_model_prams.num_res_blocks", 1, 5
-    #     )
-    #     inner_cfg["attn_reduction"] = trial.suggest_categorical(
-    #         "inner_model_prams.attn_reduction", [2, 4, 8, 16]
-    #     )
+    if model_type == "glove_typing":
+        inner_cfg["num_res_blocks"] = trial.suggest_int(
+            "inner_model_prams.num_res_blocks", 1, 8
+        )
+        inner_cfg["attn_reduction"] = trial.suggest_categorical(
+            "inner_model_prams.attn_reduction", [2, 4, 8, 16]
+        )
 
     cfg["inner_model_prams"] = inner_cfg
 

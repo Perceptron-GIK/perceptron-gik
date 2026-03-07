@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import List
+from typing import List, Optional
 
 
 class _SpatialTemporalAttentionA(nn.Module):
@@ -192,9 +192,55 @@ class CNNSTRNet(nn.Module):
         num_res_blocks: int = 3,
         dropout: float = 0.2,
         attn_reduction: int = 4,
+        input_dim: Optional[int] = None,
+        sensor_input_dim: Optional[int] = None,
+        fsr_feature_indices: Optional[List[int]] = None,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
+        self.input_dim = input_dim
+        self.raw_input_mode = input_dim is not None
+
+        self.sensor_input_dim = sensor_input_dim if sensor_input_dim is not None else input_dim
+        if self.raw_input_mode and self.sensor_input_dim is None:
+            raise ValueError("sensor_input_dim cannot be None when input_dim is provided")
+
+        self.context_input_dim = 0
+        if self.raw_input_mode:
+            self.context_input_dim = max(0, int(input_dim) - int(self.sensor_input_dim))
+
+        self.fsr_feature_indices: List[int] = []
+        self.non_fsr_feature_indices: List[int] = []
+        if self.raw_input_mode:
+            all_sensor_idx = list(range(int(self.sensor_input_dim)))
+            fsr_idx = sorted(set(fsr_feature_indices or []))
+            fsr_idx = [i for i in fsr_idx if 0 <= i < int(self.sensor_input_dim)]
+            self.fsr_feature_indices = fsr_idx
+            fsr_set = set(fsr_idx)
+            self.non_fsr_feature_indices = [i for i in all_sensor_idx if i not in fsr_set]
+
+            self.register_buffer(
+                "_fsr_idx_tensor",
+                torch.tensor(self.fsr_feature_indices, dtype=torch.long),
+                persistent=False,
+            )
+            self.register_buffer(
+                "_nonfsr_idx_tensor",
+                torch.tensor(self.non_fsr_feature_indices, dtype=torch.long),
+                persistent=False,
+            )
+
+            non_fsr_dim = len(self.non_fsr_feature_indices)
+            fsr_dim = len(self.fsr_feature_indices)
+            context_dim = self.context_input_dim
+            sensor_fusion_in = non_fsr_dim + fsr_dim + context_dim
+            if sensor_fusion_in <= 0:
+                raise ValueError("CNNSTRNet raw_input_mode requires at least one input feature")
+            self.raw_fusion = nn.Sequential(
+                nn.Linear(sensor_fusion_in, hidden_dim, bias=False),
+                nn.LayerNorm(hidden_dim),
+                nn.ReLU(),
+            )
 
         # Stage 1: CNN feature extraction (kernel=1 → pointwise across channels per timestep)
         self.cnn_feature = nn.Sequential(
@@ -216,6 +262,24 @@ class CNNSTRNet(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (B, T, H)
+        if self.raw_input_mode:
+            # x shape is (B, T, F_total) where:
+            #   - first sensor_input_dim features are sensor channels
+            #   - optional trailing features are context (e.g., prev-char embedding)
+            x_sensor = x[..., :self.sensor_input_dim]
+            x_context = x[..., self.sensor_input_dim:] if self.context_input_dim > 0 else None
+
+            parts = []
+            if self._nonfsr_idx_tensor.numel() > 0:
+                parts.append(x_sensor.index_select(dim=-1, index=self._nonfsr_idx_tensor))
+            if self._fsr_idx_tensor.numel() > 0:
+                # Explicitly keep FSR channels in the inner block pipeline.
+                parts.append(x_sensor.index_select(dim=-1, index=self._fsr_idx_tensor))
+            if x_context is not None and x_context.shape[-1] > 0:
+                parts.append(x_context)
+
+            x = torch.cat(parts, dim=-1) if len(parts) > 1 else parts[0]
+            x = self.raw_fusion(x)
 
         # --- Stage 1: CNN feature extraction ---
         # Conv1d expects (B, C, L) so transpose to channels-first

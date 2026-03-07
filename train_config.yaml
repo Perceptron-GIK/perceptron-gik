@@ -1,11 +1,11 @@
 data:
-  data_dir: data_hazel_5
+  data_dir: data_hazel_7
   keyboard_files:
-    - "Keyboard_18.csv"
+    - "Keyboard_20.csv"
   left_files:
-    - "Left_18.csv"
+    - "Left_20.csv"
   right_files:
-    - "Right_12.csv"
+    - "Right_14.csv"
 
 experiment:
   mode: "classification" # "coordinate" or "classification"
@@ -25,15 +25,17 @@ experiment:
   export_dataset_csv: true
 
 model:
-  model_type: "lstm"
+  model_type: "glove_typing"
   hidden_dim_inner_model: 512
   hidden_dim_classification_head: 1024
   num_layers: 2
   dropout: 0.362741456039648
   inner_model_prams:
-    dropout: 0.33580103298003944
-    num_layers: 2
-    bidirectional: false
+    dropout: 0.5
+    # num_layers: 2
+    # bidirectional: false
+    num_res_blocks: 3      # number of 1-D residual blocks (paper uses 3)
+    attn_reduction: 2 
 
 train:
   batch_size: 32

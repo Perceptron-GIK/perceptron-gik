@@ -59,6 +59,7 @@ class GIKModelWrapper(nn.Module):
         dropout: float = 0.3,
         n_fc_layers: int = 1,
         pool_output: bool = False,
+        use_input_projection: bool = True,
     ):
         super().__init__()
         
@@ -66,14 +67,18 @@ class GIKModelWrapper(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_classes = num_classes
         self.pool_output = pool_output
+        self.use_input_projection = use_input_projection
         
         # Input projection layer
-        self.input_projection = nn.Sequential(
-            nn.Linear(input_dim, inner_model_dim),
-            nn.LayerNorm(inner_model_dim),
-            nn.ReLU(),
-            # nn.Dropout(dropout)
-        )
+        if self.use_input_projection:
+            self.input_projection = nn.Sequential(
+                nn.Linear(input_dim, inner_model_dim),
+                nn.LayerNorm(inner_model_dim),
+                nn.ReLU(),
+                # nn.Dropout(dropout)
+            )
+        else:
+            self.input_projection = nn.Identity()
         
         # Inner model (user-provided)
         self.inner_model = inner_model
@@ -99,7 +104,8 @@ class GIKModelWrapper(nn.Module):
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass."""
-        x = self.input_projection(x)
+        if self.use_input_projection:
+            x = self.input_projection(x)
         x = self.inner_model(x)
         
         # If we have a channel dimension from CNN then pool it 
@@ -401,20 +407,26 @@ def create_model(
     if input_dim is None:
         raise ValueError("input_dim is required - get it from dataset.input_dim")
     
+    use_input_projection = True
+    inner_kwargs = dict(inner_model_kwargs)
+
     if model_type == 'transformer':
-        inner_model = TransformerModel(hidden_dim_inner_model, **inner_model_kwargs)
+        inner_model = TransformerModel(hidden_dim_inner_model, **inner_kwargs)
     elif model_type == 'attention_lstm':
-        inner_model = AttentionLSTM(hidden_dim_inner_model, **inner_model_kwargs)
+        inner_model = AttentionLSTM(hidden_dim_inner_model, **inner_kwargs)
     elif model_type == 'lstm':
-        inner_model = LSTMModel(hidden_dim_inner_model, **inner_model_kwargs)
+        inner_model = LSTMModel(hidden_dim_inner_model, **inner_kwargs)
     elif model_type == 'gru':
-        inner_model = GRUModel(hidden_dim_inner_model, **inner_model_kwargs)
+        inner_model = GRUModel(hidden_dim_inner_model, **inner_kwargs)
     elif model_type == 'rnn':
-        inner_model = RNNModel(hidden_dim_inner_model, **inner_model_kwargs)
+        inner_model = RNNModel(hidden_dim_inner_model, **inner_kwargs)
     elif model_type == 'cnn':
-        inner_model = CNNModel(hidden_dim_inner_model, **inner_model_kwargs)
+        inner_model = CNNModel(hidden_dim_inner_model, **inner_kwargs)
     elif model_type == 'glove_typing':
-        inner_model = CNNSTRNet(hidden_dim_inner_model, **inner_model_kwargs)
+        # GloveTyping runs best when raw channel-wise inputs are preserved.
+        use_input_projection = False
+        inner_kwargs.setdefault("input_dim", input_dim)
+        inner_model = CNNSTRNet(hidden_dim_inner_model, **inner_kwargs)
     else:
         raise ValueError(f"Unknown model type: {model_type}. Use: transformer, attention_lstm, lstm, gru, rnn, cnn, glove_typing")
     
@@ -424,7 +436,8 @@ def create_model(
                            dropout = dropout_inner_layers, 
                            n_fc_layers = no_layers_classification_head,
                            inner_model_dim = hidden_dim_inner_model,
-                           num_classes = output_logits)
+                           num_classes = output_logits,
+                           use_input_projection=use_input_projection)
 
 
 def create_model_auto_input_dim(
@@ -447,6 +460,18 @@ def create_model_auto_input_dim(
     input_dim = getattr(dataset, 'input_dim', None)
     if input_dim is None:
         raise ValueError("Dataset must have input_dim property")
+    auto_inner_kwargs = dict(inner_model_kwargs)
+    if model_type == 'glove_typing':
+        metadata = getattr(dataset, "metadata", {}) or {}
+        combined_cols = metadata.get("combined_col_names", [])
+        sensor_input_dim = int(metadata.get("feat_dim", input_dim))
+        auto_inner_kwargs.setdefault("sensor_input_dim", sensor_input_dim)
+        if combined_cols:
+            fsr_feature_indices = [
+                i for i, col in enumerate(combined_cols)
+                if isinstance(col, str) and col.startswith("f_")
+            ]
+            auto_inner_kwargs.setdefault("fsr_feature_indices", fsr_feature_indices)
     return create_model(model_type=model_type,
                         hidden_dim_inner_model=hidden_dim_inner_model,
                         hidden_dim_classification_head = hidden_dim_classification_head,
@@ -454,7 +479,7 @@ def create_model_auto_input_dim(
                         dropout_inner_layers = dropout_inner_layers,
                         output_logits=output_logits,
                         input_dim=input_dim, 
-                        inner_model_kwargs = inner_model_kwargs)
+                        inner_model_kwargs = auto_inner_kwargs)
 
 
 def decode_predictions(
