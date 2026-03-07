@@ -68,20 +68,22 @@ class AugmentedDataset(Dataset):
         synthetic_multiplier=0,
         precompute_synthetic=False,  # Set False by default!
         device=None,
-        regression=False   
+        regression=False,
     ):
         self.base = base_dataset
         self.augment = augment
         self.use_augmentation = use_augmentation
         self.regression = regression
+        self.synthetic_multiplier = max(0, int(synthetic_multiplier))
+        self.precompute_synthetic = bool(precompute_synthetic)
 
         # Synthetic buffer (stored in memory)
         self.synthetic_samples = []
         self.synthetic_labels = []
-        self.synthetic_raw_labels = []  # Fixed typo
+        self.synthetic_raw_labels = []
 
-        if precompute_synthetic and synthetic_multiplier > 0 and use_augmentation and augment is not None:
-            self._build_synthetic_buffer(synthetic_multiplier, device)
+        if self.precompute_synthetic and self.synthetic_multiplier > 0 and use_augmentation and augment is not None:
+            self._build_synthetic_buffer(self.synthetic_multiplier, device)
 
     def _build_synthetic_buffer(self, multiplier, device):
         """Generate multiplier augmented copies per base sample."""
@@ -104,29 +106,60 @@ class AugmentedDataset(Dataset):
                     self.synthetic_raw_labels.append(raw_label)  # ← LOCAL var
 
     def __len__(self):
-        return len(self.base) + len(self.synthetic_samples)
+        virtual_syn = 0
+        if (
+            self.synthetic_multiplier > 0
+            and self.use_augmentation
+            and self.augment is not None
+            and not self.precompute_synthetic
+        ):
+            virtual_syn = len(self.base) * self.synthetic_multiplier
+        return len(self.base) + virtual_syn + len(self.synthetic_samples)
 
     def __getitem__(self, idx):
         if idx < len(self.base):
             # Original base sample (with optional online aug)
             if self.regression:
-                x, y, raw_label = self.base[idx]  # ← LOCAL vars
+                x, y, raw_label = self.base[idx]
             else:
                 x, y = self.base[idx]
-            
+
             if self.use_augmentation and self.augment is not None:
                 x = self.augment(x)
-            
+
             if self.regression:
                 return x, y, raw_label
             return x, y
-        
+
+        virtual_syn_start = len(self.base)
+        virtual_syn_end = virtual_syn_start
+        if (
+            self.synthetic_multiplier > 0
+            and self.use_augmentation
+            and self.augment is not None
+            and not self.precompute_synthetic
+        ):
+            virtual_syn_end += len(self.base) * self.synthetic_multiplier
+
+        if virtual_syn_start <= idx < virtual_syn_end:
+            # On-the-fly synthetic samples, without storing a huge buffer.
+            base_idx = (idx - virtual_syn_start) % len(self.base)
+            if self.regression:
+                x, y, raw_label = self.base[base_idx]
+            else:
+                x, y = self.base[base_idx]
+            x = self.augment(x)
+            if self.regression:
+                return x, y, raw_label
+            return x, y
         else:
             # Precomputed synthetic sample (no further augmentation)
-            syn_idx = idx - len(self.base)
+            syn_idx = idx - virtual_syn_end
             if self.regression:
-                return (self.synthetic_samples[syn_idx], 
-                       self.synthetic_labels[syn_idx],  # Fixed: no [0]
-                       self.synthetic_raw_labels[syn_idx])
+                return (
+                    self.synthetic_samples[syn_idx],
+                    self.synthetic_labels[syn_idx],
+                    self.synthetic_raw_labels[syn_idx],
+                )
             return self.synthetic_samples[syn_idx], self.synthetic_labels[syn_idx]
 

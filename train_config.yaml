@@ -36,6 +36,11 @@ model:
     bidirectional: false
 
 train:
+  split_strategy: "stratified_random"
+  split_seed: 42
+  use_weighted_sampler: true
+  synthetic_multiplier: 5
+  precompute_synthetic: false
   batch_size: 32
   learning_rate: 0.0003228602342701459
   weight_decay: 1.2417981404367497e-05
