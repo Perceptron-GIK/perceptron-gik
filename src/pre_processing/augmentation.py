@@ -69,6 +69,7 @@ class AugmentedDataset(Dataset):
         precompute_synthetic=False,  # Set False by default!
         device=None,
         regression=False,
+        reverse_time_prob=0.0,
     ):
         self.base = base_dataset
         self.augment = augment
@@ -76,6 +77,7 @@ class AugmentedDataset(Dataset):
         self.regression = regression
         self.synthetic_multiplier = max(0, int(synthetic_multiplier))
         self.precompute_synthetic = bool(precompute_synthetic)
+        self.reverse_time_prob = float(max(0.0, min(1.0, reverse_time_prob)))
 
         # Synthetic buffer (stored in memory)
         self.synthetic_samples = []
@@ -84,6 +86,85 @@ class AugmentedDataset(Dataset):
 
         if self.precompute_synthetic and self.synthetic_multiplier > 0 and use_augmentation and augment is not None:
             self._build_synthetic_buffer(self.synthetic_multiplier, device)
+
+    def _resolve_base_item_index(self, idx):
+        """Map index in a Subset-wrapped dataset back to the original dataset index."""
+        if hasattr(self.base, "indices"):
+            base_idx = self.base.indices[idx]
+            root = self.base.dataset
+            while hasattr(root, "indices"):
+                base_idx = root.indices[base_idx]
+                root = root.dataset
+            return root, int(base_idx)
+        return self.base, int(idx)
+
+    @staticmethod
+    def _label_to_index(y):
+        if torch.is_tensor(y):
+            if y.ndim > 0:
+                return int(torch.argmax(y).item())
+            return int(y.item())
+        return int(y)
+
+    @staticmethod
+    def _index_to_label(template_y, idx):
+        if torch.is_tensor(template_y):
+            if template_y.ndim > 0:
+                one_hot = torch.zeros_like(template_y, dtype=torch.float32)
+                one_hot[int(idx)] = 1.0
+                return one_hot
+            return torch.tensor(int(idx), dtype=torch.long)
+        return int(idx)
+
+    @staticmethod
+    def _reverse_sequence_only(x):
+        x_rev = x.clone()
+        valid = (x.abs().sum(dim=-1) > 0)
+        n_valid = int(valid.sum().item())
+        if n_valid > 1:
+            x_rev[:n_valid] = torch.flip(x[:n_valid], dims=[0])
+        if n_valid < x.shape[0]:
+            x_rev[n_valid:] = 0.0
+        return x_rev
+
+    def _reverse_with_transition_swap(self, x, y, idx):
+        """Reverse temporal order and swap transition labels: prev=i, curr=j -> prev=j, curr=i."""
+        root_dataset, raw_idx = self._resolve_base_item_index(idx)
+        prev_labels = getattr(root_dataset, "_prev_labels", None)
+        labels = getattr(root_dataset, "_labels", None)
+        char_to_idx = getattr(root_dataset, "_char_to_index", None)
+        num_classes = getattr(root_dataset, "_num_classes", None)
+
+        if not (isinstance(prev_labels, list) and isinstance(labels, list) and isinstance(char_to_idx, dict)):
+            return x, y
+        if raw_idx < 0 or raw_idx >= len(labels):
+            return x, y
+
+        prev_char = prev_labels[raw_idx]
+        curr_char = labels[raw_idx]
+        if (not prev_char) or (prev_char not in char_to_idx) or (curr_char not in char_to_idx):
+            return x, y
+
+        prev_idx = int(char_to_idx[prev_char])
+        curr_idx = int(char_to_idx[curr_char])
+        x_rev = self._reverse_sequence_only(x)
+        y_rev = self._index_to_label(y, prev_idx)
+
+        if isinstance(num_classes, int) and num_classes > 0 and x_rev.shape[-1] >= num_classes:
+            prev_feat = x_rev[:, -num_classes:]
+            probe = prev_feat[0]
+            in_range = bool(((probe >= -0.05) & (probe <= 1.05)).all().item())
+            near_one = bool(abs(float(probe.sum().item()) - 1.0) < 0.2)
+            if in_range and near_one:
+                new_prev = torch.zeros((num_classes,), dtype=x_rev.dtype, device=x_rev.device)
+                new_prev[curr_idx] = 1.0
+                valid = (x_rev.abs().sum(dim=-1) > 0)
+                n_valid = int(valid.sum().item())
+                if n_valid > 0:
+                    x_rev[:n_valid, -num_classes:] = new_prev.unsqueeze(0).expand(n_valid, -1)
+                if n_valid < x.shape[0]:
+                    x_rev[n_valid:, -num_classes:] = 0.0
+        return x_rev, y_rev
 
     def _build_synthetic_buffer(self, multiplier, device):
         """Generate multiplier augmented copies per base sample."""
@@ -100,6 +181,9 @@ class AugmentedDataset(Dataset):
 
             for _ in range(multiplier):
                 x_aug = self.augment(x_orig)
+                if (not self.regression) and (self.reverse_time_prob > 0.0):
+                    if np.random.rand() < self.reverse_time_prob:
+                        x_aug = self._reverse_sequence_only(x_aug)
                 self.synthetic_samples.append(x_aug.clone())
                 self.synthetic_labels.append(y)  # y should be scalar/tensor
                 if self.regression:
@@ -127,6 +211,9 @@ class AugmentedDataset(Dataset):
             if self.use_augmentation and self.augment is not None:
                 x = self.augment(x)
 
+            if (not self.regression) and self.reverse_time_prob > 0.0 and (np.random.rand() < self.reverse_time_prob):
+                x, y = self._reverse_with_transition_swap(x, y, idx)
+
             if self.regression:
                 return x, y, raw_label
             return x, y
@@ -149,6 +236,8 @@ class AugmentedDataset(Dataset):
             else:
                 x, y = self.base[base_idx]
             x = self.augment(x)
+            if (not self.regression) and self.reverse_time_prob > 0.0 and (np.random.rand() < self.reverse_time_prob):
+                x, y = self._reverse_with_transition_swap(x, y, base_idx)
             if self.regression:
                 return x, y, raw_label
             return x, y

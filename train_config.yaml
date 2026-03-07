@@ -59,6 +59,7 @@ train:
   lm_tta_scale_jitter: 0.0
   sequence_lm_beta: 0.0
   sequence_aux_weight: 0.5
+  reverse_time_aug_prob: 0.0
   batch_size: 32
   learning_rate: 0.0003228602342701459
   weight_decay: 1.2417981404367497e-05
