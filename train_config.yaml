@@ -45,6 +45,16 @@ train:
   use_ema: false
   ema_decay: 0.999
   early_stopping_metric: "val_loss"
+  lm_order: 3
+  lm_add_k: 0.05
+  lm_beam_width: 20
+  lm_beta_values: [0.0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 1.0]
+  lm_use_interpolated: true
+  lm_tta_passes: 1
+  lm_tta_noise_std: 0.0
+  lm_tta_scale_jitter: 0.0
+  sequence_lm_beta: 0.0
+  sequence_aux_weight: 0.5
   batch_size: 32
   learning_rate: 0.0003228602342701459
   weight_decay: 1.2417981404367497e-05
