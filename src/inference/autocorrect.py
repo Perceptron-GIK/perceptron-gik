@@ -1,10 +1,14 @@
+import sys, neuspell
 from spellchecker import SpellChecker
 from neuspell import BertChecker
-import sys
 
-valid_checkers = ["pyspell", "neuspell_bert"]
+valid_checkers = ["pyspell", "neuspell-bert"]
+
 pyspell_checker = SpellChecker()
-neuspell_bert = BertChecker().from_pretrained("bert_base")
+
+neuspell_bert_path = neuspell.seq_modeling.downloads.download_pretrained_model("subwordbert-probwordnoise")
+neuspell_bert = BertChecker()
+neuspell_bert.from_pretrained(neuspell_bert_path)
 
 class AutoCorrector:
     def __init__(self, checker_type="pyspell", max_len=10):
@@ -24,18 +28,21 @@ class AutoCorrector:
             raise ValueError(f"Invalid checker type. Choose from {valid_checkers}")
 
         if corrected != self.buffer:
-            n = len(self.buffer)
-
-            sys.stdout.write("\b"*n)
-            sys.stdout.write(" "*n)
-            sys.stdout.write("\b"*n)
-            sys.stdout.write(corrected)
+            try:
+                n = len(self.buffer)
+                sys.stdout.write("\b"*n)
+                sys.stdout.write(" "*n)
+                sys.stdout.write("\b"*n)
+                sys.stdout.write(corrected)
+                sys.stdout.write(" ")
+            except:
+                pass
         
         self.buffer = ""
 
     def process_char(self, c):
+        self.buffer += c
         if c.isalnum():
-            self.buffer += c
             if len(self.buffer) >= self.max_len:
                 self.correct_word()
         else:
