@@ -41,6 +41,10 @@ train:
   use_weighted_sampler: true
   synthetic_multiplier: 5
   precompute_synthetic: false
+  mixup_alpha: 0.0
+  use_ema: false
+  ema_decay: 0.999
+  early_stopping_metric: "val_loss"
   batch_size: 32
   learning_rate: 0.0003228602342701459
   weight_decay: 1.2417981404367497e-05

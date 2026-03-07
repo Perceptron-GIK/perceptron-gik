@@ -11,6 +11,7 @@ Usage:
 """
 import os
 import sys
+import copy
 
 import torch
 from torch import nn
@@ -177,6 +178,9 @@ class GIKTrainer:
         use_weighted_sampler: bool = True,
         synthetic_multiplier: int = 0,
         precompute_synthetic: bool = False,
+        mixup_alpha: float = 0.0,
+        use_ema: bool = False,
+        ema_decay: float = 0.999,
         loss: callable = nn.CrossEntropyLoss,
         loss_kwargs: Optional[Dict] = None,
         regression: bool = False,
@@ -303,7 +307,17 @@ class GIKTrainer:
         )
         self.val_loader = DataLoader(self.val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
         self.test_loader = DataLoader(self.test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
-        
+
+        self.mixup_alpha = float(mixup_alpha)
+        self.use_ema = bool(use_ema)
+        self.ema_decay = float(ema_decay)
+        self.ema_model: Optional[nn.Module] = None
+        if self.use_ema:
+            self.ema_model = copy.deepcopy(self.model).to(self.device)
+            self.ema_model.eval()
+            for p in self.ema_model.parameters():
+                p.requires_grad_(False)
+
         self.optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         
         if loss is not None:
@@ -313,7 +327,22 @@ class GIKTrainer:
         self.criterion = self.criterion.to(self.device)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
         self.history = {'train_loss': [], 'val_loss': [], 'train_acc': [], 'val_acc': []}
-    
+
+    @torch.no_grad()
+    def _update_ema(self):
+        if not self.use_ema or self.ema_model is None:
+            return
+        d = self.ema_decay
+        for ema_p, p in zip(self.ema_model.parameters(), self.model.parameters()):
+            ema_p.data.mul_(d).add_(p.data, alpha=1.0 - d)
+        for ema_b, b in zip(self.ema_model.buffers(), self.model.buffers()):
+            ema_b.data.copy_(b.data)
+
+    def _eval_model(self) -> nn.Module:
+        if self.use_ema and self.ema_model is not None:
+            return self.ema_model
+        return self.model
+
     def train_epoch(self) -> Tuple[float, float]:
         """Train for one epoch."""
         self.model.train()
@@ -330,19 +359,32 @@ class GIKTrainer:
             batch_y = batch_y.to(self.device)
 
             self.optimizer.zero_grad()
-            logits = self.model(batch_x)
+            use_mixup = (not self.regression) and (self.mixup_alpha > 0.0)
+            if use_mixup:
+                lam = float(np.random.beta(self.mixup_alpha, self.mixup_alpha))
+                perm = torch.randperm(batch_x.size(0), device=self.device)
+                batch_x_mix = lam * batch_x + (1.0 - lam) * batch_x[perm]
+                target_a = batch_y.argmax(dim=-1)
+                target_b = batch_y[perm].argmax(dim=-1)
+                logits = self.model(batch_x_mix)
+            else:
+                logits = self.model(batch_x)
             if self.regression:
                 loss = self.criterion(logits, batch_y, raw_labels)
-                
             else:
-                loss = self.criterion(logits, batch_y.argmax(dim=-1))
+                targets = batch_y.argmax(dim=-1)
+                if use_mixup:
+                    loss = lam * self.criterion(logits, target_a) + (1.0 - lam) * self.criterion(logits, target_b)
+                else:
+                    loss = self.criterion(logits, targets)
                 pred = logits.argmax(dim=-1)
-                correct += (pred == batch_y.argmax(dim=-1)).sum().item()
+                correct += (pred == targets).sum().item()
             total += batch_x.size(0)
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self.optimizer.step()
+            self._update_ema()
 
             total_loss += loss.item() * batch_x.size(0)
 
@@ -368,7 +410,7 @@ class GIKTrainer:
             batch_x = batch_x.to(self.device)
             batch_y = batch_y.to(self.device)
 
-            logits = self.model(batch_x)
+            logits = model(batch_x)
             if self.regression:
                 loss = self.criterion(logits, batch_y, raw_labels)
             else:
@@ -383,7 +425,7 @@ class GIKTrainer:
         else:
             acc = correct / total if total else 0.0
         return total_loss / total if total else 0.0, acc
-    
+
     @torch.no_grad()
     def evaluate_test(self) -> Tuple[float, float]:
         """Evaluate on the held-out test set (causal split)."""
@@ -398,7 +440,7 @@ class GIKTrainer:
             else:
                 batch_x, batch_y = data
             batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
-            logits = self.model(batch_x)
+            logits = model(batch_x)
             if self.regression:
                 loss = self.criterion(logits, batch_y, raw_labels)
             else:
@@ -418,50 +460,65 @@ class GIKTrainer:
         return self.validate()
     
     def train(
-        self, 
+        self,
         epochs: int = 100,
         early_stopping_patience: int = 10,
+        early_stopping_metric: str = "val_loss",
         save_best: bool = True,
         save_path: str = 'best_model.pt'
     ) -> Dict[str, List[float]]:
         """Full training loop with early stopping."""
+        metric = (early_stopping_metric or "val_loss").lower()
+        use_acc_metric = (metric in {"val_acc", "acc", "accuracy"}) and (not self.regression)
+        best_metric = -float('inf') if use_acc_metric else float('inf')
         best_val_loss = float('inf')
         patience_counter = 0
-        
+
         print(f"Training on {self.device}")
         print(f"Train: {len(self.train_dataset_aug)}, Val: {len(self.val_dataset)}, Test: {len(self.test_dataset)} (split: {self.split_strategy})")
+        if use_acc_metric:
+            print("Early stopping metric: val_acc (maximize)")
+        else:
+            print("Early stopping metric: val_loss (minimize)")
         print("-" * 60)
-        
+
         for epoch in range(epochs):
             train_loss, train_acc = self.train_epoch()
             val_loss, val_acc = self.validate()
-            
+
             self.scheduler.step(val_loss)
-            
+
             self.history['train_loss'].append(train_loss)
             self.history['val_loss'].append(val_loss)
             if not self.regression:
                 self.history['train_acc'].append(train_acc)
                 self.history['val_acc'].append(val_acc)
-            
+
             print(f"Epoch {epoch+1:3d}/{epochs} ")
             print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} ")
-            
+
             if not self.regression:
                 print(f"Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f} ")
-            
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+
+            current_metric = val_acc if use_acc_metric else val_loss
+            is_better = (current_metric > best_metric) if use_acc_metric else (current_metric < best_metric)
+            if is_better:
+                best_metric = current_metric
+                best_val_loss = min(best_val_loss, val_loss)
                 patience_counter = 0
                 if save_best:
-                    torch.save(self.model.state_dict(), save_path)
-                    print(f"  -> Saved best model (val_loss: {val_loss:.4f})")
+                    state_dict = self.ema_model.state_dict() if (self.use_ema and self.ema_model is not None) else self.model.state_dict()
+                    torch.save(state_dict, save_path)
+                    if use_acc_metric:
+                        print(f"  -> Saved best model (val_acc: {val_acc:.4f}, val_loss: {val_loss:.4f})")
+                    else:
+                        print(f"  -> Saved best model (val_loss: {val_loss:.4f})")
             else:
                 patience_counter += 1
                 if patience_counter >= early_stopping_patience:
                     print(f"\nEarly stopping at epoch {epoch+1}")
                     break
-        
+
         print("-" * 60)
         print(f"Training complete. Best val loss: {best_val_loss:.4f}")
         
