@@ -23,7 +23,9 @@ def reduce_dim(
         normalize: bool = "False",
         output_path: Optional[str] = None,
         dims_ratio: Optional[float] = None,
-        root_dir: Optional[str] = None
+        root_dir: Optional[str] = None,
+        fit_on_train_only: bool = True,
+        train_ratio: float = 0.8,
 ) -> Dict[str, int]:
     """
     Applies dimensionality reduction to the preprocessed dataset
@@ -38,6 +40,8 @@ def reduce_dim(
         output_path: Path of output file generated from dimensionality reduction (during training only)
         dims_ratio: Proportion of dimensions to keep (for PCA only)
         root_dir: Project root (for PCA only)
+        fit_on_train_only: Whether PCA should be fit only on train windows (prevents leakage)
+        train_ratio: Fraction of windows treated as training data for PCA fitting
 
     If reading data from a PyTorch file:
         Returns: dims dictionary with feature dimension before and after dimensionality reduction
@@ -55,7 +59,14 @@ def reduce_dim(
     if method == "active-imu":
         return active_imu_only(data_dir, inference_source, has_left, has_right, normalize, output_path)
     elif method == "pca":
-        return pca(data, dims_ratio, output_path, root_dir)
+        return pca(
+            data,
+            dims_ratio,
+            output_path,
+            root_dir,
+            fit_on_train_only=fit_on_train_only,
+            train_ratio=train_ratio,
+        )
     else:
         raise Exception("Invalid dimensionality reduction method.")
 
@@ -224,33 +235,92 @@ def active_imu_only(data_dir, inference_source, has_left, has_right, normalize, 
     else:
         return output
 
-def pca(data, dims_ratio, output_path, root_dir):
+def _window_valid_mask(samples: torch.Tensor) -> torch.Tensor:
+    # A row is valid if any feature is non-zero. This matches the padding convention.
+    return samples.abs().sum(dim=2) > 0
+
+
+def _fit_pca_components(
+    samples: torch.Tensor,
+    dim_aft: int,
+    fit_on_train_only: bool,
+    train_ratio: float,
+):
+    W, _, _ = samples.shape
+    valid_mask = _window_valid_mask(samples)
+
+    fit_windows = W
+    if fit_on_train_only:
+        fit_windows = max(1, int(W * train_ratio))
+
+    fit_rows = []
+    for w in range(fit_windows):
+        mask_w = valid_mask[w]
+        if mask_w.any():
+            fit_rows.append(samples[w, mask_w])
+
+    if not fit_rows:
+        # Fallback: if all rows are zero in train split, search entire set.
+        for w in range(W):
+            mask_w = valid_mask[w]
+            if mask_w.any():
+                fit_rows.append(samples[w, mask_w])
+
+    if not fit_rows:
+        raise ValueError("PCA fitting failed: no valid (non-padded) rows found.")
+
+    fit_data = torch.cat(fit_rows, dim=0)
+    mean = fit_data.mean(dim=0, keepdim=True)
+    centered = fit_data - mean
+    # linalg.svd is preferred over deprecated torch.svd.
+    _, _, vh = torch.linalg.svd(centered, full_matrices=False)
+    components = vh[:dim_aft].T.contiguous()
+    return mean, components
+
+
+def _apply_pca_preserve_padding(samples: torch.Tensor, mean: torch.Tensor, components: torch.Tensor) -> torch.Tensor:
+    W, R, _ = samples.shape
+    dim_aft = components.shape[1]
+    output = samples.new_zeros((W, R, dim_aft))
+    valid_mask = _window_valid_mask(samples)
+
+    for w in range(W):
+        mask_w = valid_mask[w]
+        if mask_w.any():
+            output[w, mask_w] = torch.matmul(samples[w, mask_w] - mean, components)
+    return output
+
+
+def pca(data, dims_ratio, output_path, root_dir, fit_on_train_only=True, train_ratio=0.8):
     if isinstance(data, dict):
         samples = data["samples"]
 
         W, R, C = samples.shape # (nWindows, nRows, nCols)
 
         dim_bef = C
-        dim_aft = int(dim_bef*dims_ratio)
+        dim_aft = max(1, int(dim_bef * dims_ratio))
         dims = {
             "dim_bef": dim_bef,
             "dim_aft": dim_aft
         }
 
-        all_samples = torch.cat([w for w in samples], dim=0)
-        mean = all_samples.mean(dim=0, keepdim=True)
-        samples_centered = all_samples - mean
-        U, S, V = torch.svd(samples_centered)
-        components = V[:, :dim_aft]
+        mean, components = _fit_pca_components(
+            samples=samples,
+            dim_aft=dim_aft,
+            fit_on_train_only=fit_on_train_only,
+            train_ratio=train_ratio,
+        )
 
         pca_params = {
             "mean": mean,
-            "components": components
+            "components": components,
+            "fit_on_train_only": bool(fit_on_train_only),
+            "train_ratio": float(train_ratio),
+            "preserve_padding": True,
         }
         torch.save(pca_params, os.path.join(root_dir, "pca_params.pt"))
 
-        output = torch.matmul(samples_centered, components)
-        output = output.reshape(W, R, dim_aft)
+        output = _apply_pca_preserve_padding(samples, mean, components)
 
         data["samples"] = output
         data["metadata"]["feat_dim"] = dim_aft
@@ -258,8 +328,7 @@ def pca(data, dims_ratio, output_path, root_dir):
         torch.save(data, output_path)
         return dims
     else:
-        W, R, C = data.shape
-        samples = torch.cat([w for w in data], dim=0)
+        samples = data
 
         params_path = os.path.join(root_dir, "pca_params.pt")
         if not os.path.exists(params_path):
@@ -268,8 +337,6 @@ def pca(data, dims_ratio, output_path, root_dir):
         pca_params = torch.load(os.path.join(root_dir, "pca_params.pt"), weights_only=False)
         mean = pca_params["mean"]
         components = pca_params["components"]
-        samples_centered = samples - mean
-        output = torch.matmul(samples_centered, components)
+        output = _apply_pca_preserve_padding(samples, mean, components)
 
-        return output.reshape(W, R, components.shape[1])   
-    
+        return output
