@@ -192,7 +192,8 @@ def run_inference(
         else:
             prediction = CHAR_TO_INDEX[get_closest_coordinate(model.predict_coords(processed_data), FULL_COORDS)]
 
-    print(INDEX_TO_CHAR[prediction], end="")
+    sys.stdout.write(INDEX_TO_CHAR[prediction])
+    sys.stdout.flush()
     return prediction
     
 async def process_queues(left_queue, right_queue):
