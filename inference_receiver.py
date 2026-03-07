@@ -5,6 +5,7 @@ from bleak import BleakScanner, BleakClient
 
 from src.Constants.char_to_key import NUM_CLASSES, INDEX_TO_CHAR, CHAR_TO_INDEX, FULL_COORDS
 from src.inference.sliding_window import SlidingWindow
+from src.inference.autocorrect import AutoCorrector
 from src.visualisation.visualisation import get_closest_coordinate
 from inference_preprocessing import preprocess
 from ml.models.gik_model import create_model
@@ -68,6 +69,9 @@ MODEL_PATH = os.path.join(PROJECT_ROOT, "best_model.pt")
 DEVICE = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
 
 FSR_INDICES = [12, 19, 26, 33, 40]
+
+# Valid checkers: "pyspell", "neuspell-bert"
+AUTOCORRECTOR = AutoCorrector(checker_type="pyspell", max_len=10)
 
 ## ================================================== ##
 # BLUETOOTH FUNCTIONS
@@ -188,13 +192,16 @@ def run_inference(
 
     with torch.no_grad():
         if EXPERIMENT_MODE == "classification":
-            prediction = model.predict(processed_data).item()
+            predicted_idx = model.predict(processed_data).item()
         else:
-            prediction = CHAR_TO_INDEX[get_closest_coordinate(model.predict_coords(processed_data), FULL_COORDS)]
+            predicted_idx = CHAR_TO_INDEX[get_closest_coordinate(model.predict_coords(processed_data), FULL_COORDS)]
 
-    sys.stdout.write(INDEX_TO_CHAR[prediction])
+    predicted_char = INDEX_TO_CHAR[predicted_idx]
+    AUTOCORRECTOR.process_char(predicted_char)
+    sys.stdout.write(predicted_char)
     sys.stdout.flush()
-    return prediction
+    
+    return predicted_idx
     
 async def process_queues(left_queue, right_queue):
     left_win = SlidingWindow()
