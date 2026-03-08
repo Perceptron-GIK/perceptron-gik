@@ -15,10 +15,11 @@ import sys
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torch.utils.data import Dataset, DataLoader, random_split, Subset
+from torch.utils.data import Dataset, DataLoader, random_split, Subset, WeightedRandomSampler
 from torch import optim
 import numpy as np
 from typing import Optional, Tuple, List, Dict, Any
+from collections import defaultdict, Counter
 from .default_models import (
     TransformerModel, AttentionLSTM, LSTMModel, GRUModel, RNNModel, CNNModel,
     CNNSTRNet,
@@ -171,6 +172,11 @@ class GIKTrainer:
         batch_size: int = 32,
         train_ratio: float = 0.8,
         val_ratio: float = 0.1,
+        split_strategy: str = "stratified_random",
+        split_seed: int = 42,
+        use_weighted_sampler: bool = True,
+        synthetic_multiplier: int = 0,
+        precompute_synthetic: bool = False,
         loss: callable = nn.CrossEntropyLoss,
         loss_kwargs: Optional[Dict] = None,
         regression: bool = False,
@@ -190,21 +196,107 @@ class GIKTrainer:
         self.device = torch.device(device)
         self.model = model.to(self.device)
         self.batch_size = batch_size
-        
-        # Contiguous splits (causality-preserving, no shuffle)
         n = len(dataset)
-        t = max(0, int(n * train_ratio))
-        v = max(t, t + int(n * val_ratio))
-        self.train_dataset = Subset(dataset, range(0, t))
-        self.val_dataset = Subset(dataset, range(t, v))
-        self.test_dataset = Subset(dataset, range(v, n))
+        labels = getattr(dataset, "_labels", None)
+        split_strategy = (split_strategy or "contiguous").lower()
+
+        if (
+            not regression
+            and split_strategy == "stratified_random"
+            and isinstance(labels, list)
+            and len(labels) == n
+        ):
+            rng = np.random.default_rng(split_seed)
+            by_class: Dict[str, List[int]] = defaultdict(list)
+            for i, lbl in enumerate(labels):
+                by_class[lbl].append(i)
+
+            train_idx: List[int] = []
+            val_idx: List[int] = []
+            test_idx: List[int] = []
+            for cls_idx in by_class.values():
+                cls_idx = np.array(cls_idx, dtype=np.int64)
+                rng.shuffle(cls_idx)
+                n_cls = len(cls_idx)
+                n_train_cls = int(n_cls * train_ratio)
+                n_val_cls = int(n_cls * val_ratio)
+                if n_cls >= 3:
+                    n_train_cls = max(1, min(n_train_cls, n_cls - 2))
+                    n_val_cls = max(1, min(n_val_cls, n_cls - n_train_cls - 1))
+                elif n_cls == 2:
+                    n_train_cls = 1
+                    n_val_cls = 0
+                else:
+                    n_train_cls = 1
+                    n_val_cls = 0
+
+                train_idx.extend(cls_idx[:n_train_cls].tolist())
+                val_idx.extend(cls_idx[n_train_cls : n_train_cls + n_val_cls].tolist())
+                test_idx.extend(cls_idx[n_train_cls + n_val_cls :].tolist())
+
+            rng.shuffle(train_idx)
+            rng.shuffle(val_idx)
+            rng.shuffle(test_idx)
+        else:
+            t = max(1, int(n * train_ratio))
+            v_len = max(1, int(n * val_ratio))
+            if t + v_len >= n:
+                v_len = max(1, n - t - 1)
+            v = min(n, t + v_len)
+            train_idx = list(range(0, t))
+            val_idx = list(range(t, v))
+            test_idx = list(range(v, n))
+            split_strategy = "contiguous"
+
+        self.train_dataset = Subset(dataset, train_idx)
+        self.val_dataset = Subset(dataset, val_idx)
+        self.test_dataset = Subset(dataset, test_idx)
+        self.split_strategy = split_strategy
 
         augment = GIKAugmentationsPerFeature()
-        # augmentation boolean as the flag, if false returns the same data, if true then applies augmentation on the fly
         self.regression = regression
-        self.train_dataset_aug = AugmentedDataset(self.train_dataset, augment=augment, use_augmentation=augmentation, synthetic_multiplier=5, precompute_synthetic=True, device=self.device, regression=regression)   # or False to disable
-        
-        self.train_loader = DataLoader(self.train_dataset_aug, batch_size=batch_size, shuffle=True, num_workers=0) # pass in the augmented dataset here for training only
+        # Keep augmentation/synthetic generation on CPU for GPU/MPS stability.
+        self.train_dataset_aug = AugmentedDataset(
+            self.train_dataset,
+            augment=augment,
+            use_augmentation=augmentation,
+            synthetic_multiplier=synthetic_multiplier,
+            precompute_synthetic=precompute_synthetic,
+            device=None,
+            regression=regression,
+        )
+
+        sampler = None
+        if use_weighted_sampler and not regression and isinstance(labels, list) and len(labels) == n:
+            char_to_idx = getattr(dataset, "_char_to_index", None)
+            if isinstance(char_to_idx, dict):
+                base_label_idx = [char_to_idx[labels[i]] for i in train_idx]
+                cls_counts = Counter(base_label_idx)
+                cls_weights = {c: (1.0 / cnt) for c, cnt in cls_counts.items()}
+                base_weights = [cls_weights[c] for c in base_label_idx]
+
+                syn_weights = []
+                for y in self.train_dataset_aug.synthetic_labels:
+                    if torch.is_tensor(y):
+                        c = int(torch.argmax(y).item()) if y.ndim > 0 else int(y.item())
+                    else:
+                        c = int(y)
+                    syn_weights.append(cls_weights.get(c, 1.0))
+
+                virtual_syn_mult = int(getattr(self.train_dataset_aug, "synthetic_multiplier", 0))
+                use_aug = bool(getattr(self.train_dataset_aug, "use_augmentation", False))
+                use_virtual_syn = (
+                    use_aug
+                    and virtual_syn_mult > 0
+                    and not bool(getattr(self.train_dataset_aug, "precompute_synthetic", False))
+                )
+                if use_virtual_syn:
+                    syn_weights.extend(base_weights * virtual_syn_mult)
+
+                weights = torch.tensor(base_weights + syn_weights, dtype=torch.double)
+                sampler = WeightedRandomSampler(weights=weights, num_samples=len(weights), replacement=True)
+
+        self.train_loader = DataLoader(self.train_dataset_aug,batch_size=batch_size,shuffle=(sampler is None),sampler=sampler,num_workers=0,)
         self.val_loader = DataLoader(self.val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
         self.test_loader = DataLoader(self.test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
         
@@ -333,7 +425,7 @@ class GIKTrainer:
         patience_counter = 0
         
         print(f"Training on {self.device}")
-        print(f"Train: {len(self.train_dataset_aug)}, Val: {len(self.val_dataset)}, Test: {len(self.test_dataset)} (causal split, no shuffle)")
+        print(f"Train: {len(self.train_dataset_aug)}, Val: {len(self.val_dataset)}, Test: {len(self.test_dataset)} (split: {self.split_strategy})")
         print("-" * 60)
         
         for epoch in range(epochs):
