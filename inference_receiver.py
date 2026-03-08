@@ -1,11 +1,17 @@
 import asyncio, struct, time, os, sys, yaml, torch
 import numpy as np
-from typing import Callable, Any
+from typing import Callable, Any, Optional
 from bleak import BleakScanner, BleakClient
 
 from src.Constants.char_to_key import NUM_CLASSES, INDEX_TO_CHAR, CHAR_TO_INDEX, FULL_COORDS
 from src.inference.sliding_window import SlidingWindow
 from src.visualisation.visualisation import get_closest_coordinate
+from src.decoding.lm_fusion import (
+    build_char_ngram_lm,
+    build_interpolated_char_lm,
+    fuse_single_step_logits_with_lm,
+    get_logits_single_tta,
+)
 from inference_preprocessing import preprocess
 from ml.models.gik_model import create_model
 
@@ -74,6 +80,21 @@ INFERENCE_CONFIG = {
     "dim_red_method": DIM_RED_CFG.get("method", "pca"),
     "dims_ratio": DIM_RED_CFG.get("pca", {}).get("dims_ratio", 0.5),
 }
+
+TRAIN_CFG = config_data.get("train", {})
+# LM fusion for real-time inference (classification only)
+LM_FUSION_ENABLED = EXPERIMENT_MODE == "classification" and TRAIN_CFG.get("lm_fusion_inference", False)
+LM_INFERENCE_BETA = float(TRAIN_CFG.get("lm_inference_beta", 0.4))
+LM_ORDER = int(TRAIN_CFG.get("lm_order", 3))
+LM_HISTORY_LEN = max(0, LM_ORDER - 1)
+LM_ADD_K = float(TRAIN_CFG.get("lm_add_k", 0.05))
+LM_USE_INTERPOLATED = bool(TRAIN_CFG.get("lm_use_interpolated", True))
+TTA_PASSES = max(1, int(TRAIN_CFG.get("lm_tta_passes", 1)))
+TTA_NOISE_STD = float(TRAIN_CFG.get("lm_tta_noise_std", 0.0))
+TTA_SCALE_JITTER = float(TRAIN_CFG.get("lm_tta_scale_jitter", 0.0))
+
+_INFERENCE_LM: Optional[dict] = None
+_INFERENCE_MODEL: Optional[torch.nn.Module] = None
 
 MODEL_PATH = os.path.join(PROJECT_ROOT, "best_model.pt")
 
@@ -157,52 +178,100 @@ async def connect(device_name, uuid, queue):
 ## ================================================== ##
 # INFERENCE FUNCTIONS
 
-def run_inference(
-    left: np.ndarray=None,
-    right: np.ndarray=None,
-    left_pointer: int=None,
-    right_pointer: int=None,
-    prev_char: Any=None
-):
-    processed_data = preprocess(
-        left_data = left,
-        right_data = right,
-        left_pointer = left_pointer,
-        right_pointer = right_pointer,
-        prev_char = prev_char,
-        mode = EXPERIMENT_MODE,
-        max_seq_length = INFERENCE_CONFIG["max_seq_length"],
-        normalize = INFERENCE_CONFIG["normalize"],
-        apply_filtering = INFERENCE_CONFIG["apply_filtering"],
-        apply_dim_reduction = INFERENCE_CONFIG["reduce_dim"],
-        dim_red_method = INFERENCE_CONFIG["dim_red_method"],
-        dims_ratio = INFERENCE_CONFIG["dims_ratio"],
-        root_dir = PROJECT_ROOT,
-        training_dataset = PROCESSED_TRAINING_DATA
-    )
+def _get_inference_lm() -> Optional[dict]:
+    """Build LM from training labels (cached)."""
+    global _INFERENCE_LM
+    if _INFERENCE_LM is not None:
+        return _INFERENCE_LM
+    if not LM_FUSION_ENABLED:
+        return None
+    try:
+        data = torch.load(PROCESSED_TRAINING_DATA, weights_only=False)
+        labels = data.get("labels", [])
+        if not isinstance(labels, list) or len(labels) == 0:
+            return None
+        if LM_USE_INTERPOLATED and LM_ORDER > 1:
+            _INFERENCE_LM = build_interpolated_char_lm(labels, max_order=LM_ORDER, add_k=LM_ADD_K)
+        else:
+            _INFERENCE_LM = build_char_ngram_lm(labels, order=LM_ORDER, add_k=LM_ADD_K)
+        return _INFERENCE_LM
+    except Exception as e:
+        print(f"LM build failed: {e}, disabling LM fusion")
+        return None
 
-    input_dim = processed_data.shape[2]
-
+def _get_inference_model(input_dim: int):
+    """Load and cache model (reused across inferences)."""
+    global _INFERENCE_MODEL
+    if _INFERENCE_MODEL is not None and getattr(_INFERENCE_MODEL, "_gik_input_dim", None) == input_dim:
+        return _INFERENCE_MODEL
     model = create_model(
-        model_type = TRAINING_CONFIG["model_type"],
-        hidden_dim_inner_model = TRAINING_CONFIG['hidden_dim_inner_model'],
-        hidden_dim_classification_head = TRAINING_CONFIG['hidden_dim_classification_head'],
-        no_layers_classification_head = TRAINING_CONFIG['num_layers'],
-        dropout_inner_layers = TRAINING_CONFIG['dropout'],
-        inner_model_kwargs = TRAINING_CONFIG['inner_model_prams'],
-        output_logits = TRAINING_CONFIG['output_logits'],
-        input_dim = input_dim
+        model_type=TRAINING_CONFIG["model_type"],
+        hidden_dim_inner_model=TRAINING_CONFIG["hidden_dim_inner_model"],
+        hidden_dim_classification_head=TRAINING_CONFIG["hidden_dim_classification_head"],
+        no_layers_classification_head=TRAINING_CONFIG["num_layers"],
+        dropout_inner_layers=TRAINING_CONFIG["dropout"],
+        inner_model_kwargs=TRAINING_CONFIG["inner_model_prams"],
+        output_logits=TRAINING_CONFIG["output_logits"],
+        input_dim=input_dim,
     )
-
     model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False))
     model.to(DEVICE)
     model.eval()
+    model._gik_input_dim = input_dim
+    _INFERENCE_MODEL = model
+    return model
+
+def run_inference(
+    left: np.ndarray = None,
+    right: np.ndarray = None,
+    left_pointer: int = None,
+    right_pointer: int = None,
+    prev_char: Any = None,
+    history_chars: Optional[list] = None,
+):
+    """
+    prev_char: index of previous char (for preprocess input feature)
+    history_chars: list of last (lm_order-1) chars for LM context
+    """
+    processed_data = preprocess(
+        left_data=left,
+        right_data=right,
+        left_pointer=left_pointer,
+        right_pointer=right_pointer,
+        prev_char=prev_char,
+        mode=EXPERIMENT_MODE,
+        max_seq_length=INFERENCE_CONFIG["max_seq_length"],
+        normalize=INFERENCE_CONFIG["normalize"],
+        apply_filtering=INFERENCE_CONFIG["apply_filtering"],
+        apply_dim_reduction=INFERENCE_CONFIG["reduce_dim"],
+        dim_red_method=INFERENCE_CONFIG["dim_red_method"],
+        dims_ratio=INFERENCE_CONFIG["dims_ratio"],
+        root_dir=PROJECT_ROOT,
+        training_dataset=PROCESSED_TRAINING_DATA,
+    )
+
+    input_dim = processed_data.shape[2]
+    model = _get_inference_model(input_dim)
+    x = processed_data if torch.is_tensor(processed_data) else torch.tensor(processed_data, dtype=torch.float32)
 
     with torch.no_grad():
         if EXPERIMENT_MODE == "classification":
-            prediction = model.predict(processed_data).item()
+            if TTA_PASSES > 1 or TTA_NOISE_STD > 0.0 or TTA_SCALE_JITTER > 0.0:
+                logits = get_logits_single_tta(
+                    x, model, str(DEVICE),
+                    tta_passes=TTA_PASSES,
+                    noise_std=TTA_NOISE_STD,
+                    scale_jitter=TTA_SCALE_JITTER,
+                )
+            else:
+                logits = model(x.to(DEVICE)).squeeze(0).cpu()
+            lm = _get_inference_lm()
+            if lm is not None and LM_INFERENCE_BETA > 0.0:
+                history = list(history_chars)[-LM_HISTORY_LEN:] if history_chars else []
+                logits = fuse_single_step_logits_with_lm(logits, lm, history, LM_INFERENCE_BETA)
+            prediction = logits.argmax(dim=-1).item()
         else:
-            prediction = CHAR_TO_INDEX[get_closest_coordinate(model.predict_coords(processed_data), FULL_COORDS)]
+            prediction = CHAR_TO_INDEX[get_closest_coordinate(model.predict_coords(x.to(DEVICE)), FULL_COORDS)]
 
     print(INDEX_TO_CHAR[prediction], end="")
     return prediction
@@ -213,6 +282,7 @@ async def process_queues(left_queue, right_queue):
     left_all = SlidingWindow(maxlen=1000)
     right_all = SlidingWindow(maxlen=1000)
     prev_char = None
+    history_chars: list = []
 
     while True:
         left_task = asyncio.create_task(left_queue.get())
@@ -255,13 +325,19 @@ async def process_queues(left_queue, right_queue):
         if triggered_hand == "left":
             left_all.append(chunk)
             right_all.append(opp_chunk)
-            # prev_char = await asyncio.to_thread(run_inference, np.vstack(tuple(left_all.data)), np.vstack(tuple(right_all.data)), pointer, opp_pointer, prev_char)
-            prev_char = await asyncio.to_thread(run_inference, chunk, opp_chunk, None, None, prev_char)
+            prev_char = await asyncio.to_thread(
+                run_inference, chunk, opp_chunk, None, None, prev_char, history_chars
+            )
         else:
             left_all.append(opp_chunk)
             right_all.append(chunk)
-            # prev_char = await asyncio.to_thread(run_inference, np.vstack(tuple(left_all.data)), np.vstack(tuple(right_all.data)), opp_pointer, pointer, prev_char)
-            prev_char = await asyncio.to_thread(run_inference, opp_chunk, chunk, None, None, prev_char)
+            prev_char = await asyncio.to_thread(
+                run_inference, opp_chunk, chunk, None, None, prev_char, history_chars
+            )
+        if prev_char is not None and LM_HISTORY_LEN > 0:
+            history_chars.append(INDEX_TO_CHAR[prev_char])
+            if len(history_chars) > LM_HISTORY_LEN:
+                history_chars.pop(0)
 
 ## ================================================== ##
 
