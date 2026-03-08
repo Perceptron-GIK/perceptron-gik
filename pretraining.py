@@ -454,18 +454,53 @@ def export_dataset_to_csv(
         print(f"  {char}: {count}")
     return summary_path
 
-def get_class_weights(pt_path: str) -> torch.Tensor:
-    """Calculates Class Weights for the Processed Dataset
+def get_class_weights(
+    pt_path: str,
+    train_ratio: float = 1.0,
+    split_strategy: str = "contiguous",
+    split_seed: int = 42,
+) -> torch.Tensor:
+    """Calculates Class Weights for the Processed Dataset (train split only to prevent leakage)
 
     Args:
         pt_path (str): Path to the .pt file
+        train_ratio: Fraction of data for training
+        split_strategy: "contiguous" or "stratified_random"
+        split_seed: Random seed for stratified split
 
     Returns:
-        Dict: Dictionary mapping each character to its weight
+        Tensor: Class weights
     """
     data = torch.load(pt_path, weights_only=False)
     labels = data["labels"]  # list[str]
 
+    if train_ratio >= 1.0:
+        return get_class_weights_from_labels(labels)
+
+    n = len(labels)
+    n_train = max(1, int(n * train_ratio))
+    split_strategy = (split_strategy or "contiguous").lower()
+
+    if split_strategy == "stratified_random":
+        rng = np.random.default_rng(split_seed)
+        by_class: Dict[str, List[int]] = {}
+        for i, lbl in enumerate(labels):
+            by_class.setdefault(lbl, []).append(i)
+        train_idx: List[int] = []
+        for cls_idx in by_class.values():
+            cls_idx = np.array(cls_idx, dtype=np.int64)
+            rng.shuffle(cls_idx)
+            k = int(len(cls_idx) * train_ratio)
+            k = max(1, min(k, len(cls_idx)))
+            train_idx.extend(cls_idx[:k].tolist())
+        labels_train = [labels[i] for i in train_idx]
+    else:
+        labels_train = labels[:n_train]
+
+    return get_class_weights_from_labels(labels_train)
+
+
+def get_class_weights_from_labels(labels: List[str]) -> torch.Tensor:
     counts = Counter(labels)
     N = sum(counts.values())
     K = len(CHAR_TO_INDEX)
@@ -473,7 +508,7 @@ def get_class_weights(pt_path: str) -> torch.Tensor:
     w = torch.ones(K, dtype=torch.float32)
     for ch, idx in CHAR_TO_INDEX.items():
         n_c = counts.get(ch, 0)
-        w[idx] = (N / (K * n_c)) if n_c > 0 else 1.0  # or keep 1.0 / drop class
+        w[idx] = (N / (K * n_c)) if n_c > 0 else 1.0
     return w
 
 class PreprocessedGIKDataset(Dataset):

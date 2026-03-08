@@ -1,11 +1,11 @@
 data:
-  data_dir: data_hazel_5
+  data_dir: data_hazel_7
   keyboard_files:
-    - "Keyboard_18.csv"
+    - "Keyboard_20.csv"
   left_files:
-    - "Left_18.csv"
+    - "Left_20.csv"
   right_files:
-    - "Right_12.csv"
+    - "Right_14.csv"
 
 experiment:
   mode: "classification" # "coordinate" or "classification"
@@ -19,7 +19,10 @@ experiment:
     enabled: true
     method: pca
     pca:
-      dims_ratio: 0.5
+      dims_ratio: 0.4
+      fit_on_train_only: true
+      train_ratio: 0.8
+      use_fsr: false
   use_augmentation: false
   run_preprocess: true
   export_dataset_csv: true
@@ -58,7 +61,7 @@ modes:
     use_class_weights: true
     output_logits: 2
     is_one_hot: false
-    key_mapping_dict: "CHAR_TO_INDEX"
+    key_mapping_dict: "FULL_COORDS"
     return_class_id: true
     regression: true
     loss: CoordinateLossClassification
