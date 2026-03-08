@@ -294,13 +294,7 @@ class GIKTrainer:
                 weights = torch.tensor(base_weights + syn_weights, dtype=torch.double)
                 sampler = WeightedRandomSampler(weights=weights, num_samples=len(weights), replacement=True)
 
-        self.train_loader = DataLoader(
-            self.train_dataset_aug,
-            batch_size=batch_size,
-            shuffle=(sampler is None),
-            sampler=sampler,
-            num_workers=0,
-        )
+        self.train_loader = DataLoader(self.train_dataset_aug,batch_size=batch_size,shuffle=(sampler is None),sampler=sampler,num_workers=0,)
         self.val_loader = DataLoader(self.val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
         self.test_loader = DataLoader(self.test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
         
