@@ -284,8 +284,10 @@ class GIKTrainer:
                     syn_weights.append(cls_weights.get(c, 1.0))
 
                 virtual_syn_mult = int(getattr(self.train_dataset_aug, "synthetic_multiplier", 0))
+                use_aug = bool(getattr(self.train_dataset_aug, "use_augmentation", False))
                 use_virtual_syn = (
-                    virtual_syn_mult > 0
+                    use_aug
+                    and virtual_syn_mult > 0
                     and not bool(getattr(self.train_dataset_aug, "precompute_synthetic", False))
                 )
                 if use_virtual_syn:
