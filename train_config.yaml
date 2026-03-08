@@ -53,6 +53,8 @@ train:
   lm_beam_width: 20
   lm_beta_values: [0.0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 1.0]
   lm_use_interpolated: true
+  lm_fusion_inference: true
+  lm_inference_beta: 0.4
   lm_tta_passes: 1
   lm_tta_noise_std: 0.0
   lm_tta_scale_jitter: 0.0
