@@ -59,11 +59,12 @@ train:
   lm_use_interpolated: true   # true/false — interpolate orders 1..lm_order for LM
   lm_fusion_inference: true   # true/false — enable LM fusion in real-time inference
   lm_inference_beta: 0.4      # float >= 0 — LM weight in inference; 0 = no LM; tune from eval output
-  lm_tta_passes: 5            # int >= 1 — TTA passes; 1 = no TTA; >1 averages over augmented forwards
-  lm_tta_noise_std: 0.01       # float >= 0 — Gaussian noise std for TTA; 0 = no noise
+  lm_tta_passes: 1            # int >= 1 — TTA passes; 1 = no TTA; >1 averages over augmented forwards
+  lm_tta_noise_std: 0.0       # float >= 0 — Gaussian noise std for TTA; 0 = no noise
   lm_tta_scale_jitter: 0.0    # float >= 0 — scale jitter for TTA; 0 = no jitter
-  sequence_lm_beta: 0.8       # float >= 0 — in-training auxiliary LM loss weight; 0 = disabled
+  sequence_lm_beta: 0.0       # float >= 0 — in-training auxiliary LM loss weight; 0 = disabled
   sequence_aux_weight: 0.5    # (0, 1] — weight of aux LM loss when sequence_lm_beta > 0
+  reverse_time_aug_prob: 0.0  # float [0, 1] — probability of reverse-time augmentation
   batch_size: 32
   learning_rate: 0.0003228602342701459
   weight_decay: 1.2417981404367497e-05

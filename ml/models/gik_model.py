@@ -192,6 +192,7 @@ class GIKTrainer:
         ema_decay: float = 0.999,
         sequence_lm_beta: float = 0.0,
         sequence_aux_weight: float = 0.5,
+        reverse_time_aug_prob: float = 0.0,
         loss: callable = nn.CrossEntropyLoss,
         loss_kwargs: Optional[Dict] = None,
         regression: bool = False,
@@ -279,6 +280,7 @@ class GIKTrainer:
             precompute_synthetic=precompute_synthetic,
             device=None,
             regression=regression,
+            reverse_time_prob=reverse_time_aug_prob,
         )
 
         sampler = None
