@@ -102,7 +102,9 @@ def preprocess_multiple_sources(
     max_seq_length: int = 10,
     normalize: bool = True,
     per_sample_normalizaion: bool = False,
-    apply_filtering: bool = True
+    apply_filtering: bool = True,
+    alignment_prev_windows: int = 0,
+    alignment_future_windows: int = 0,
 ) -> Dict[str, Any]:
     """
     Preprocess data from multiple source files and combine them.
@@ -157,7 +159,9 @@ def preprocess_multiple_sources(
         
         samples, labels, prev_labels, metadata = preprocessor.align(
             max_seq_length=max_seq_length,
-            filter_func=filter_imu_data if apply_filtering else None
+            filter_func=filter_imu_data if apply_filtering else None,
+            context_prev_windows=alignment_prev_windows,
+            context_future_windows=alignment_future_windows,
         )
 
         all_samples.extend(samples)
@@ -300,6 +304,8 @@ def preprocess_multiple_sources(
         'left_files': left_files if has_left else [],
         'right_files': right_files if has_right else [],
         'filter_applied': apply_filtering,
+        'alignment_prev_windows': int(alignment_prev_windows),
+        'alignment_future_windows': int(alignment_future_windows),
     }
 
     save_dict = {

@@ -1,6 +1,6 @@
 import asyncio, struct, time, os, sys, yaml, torch
 import numpy as np
-from typing import Callable, Any, Optional
+from typing import Callable, Any, Optional, Dict, List
 from bleak import BleakScanner, BleakClient
 
 from src.Constants.char_to_key import NUM_CLASSES, INDEX_TO_CHAR, CHAR_TO_INDEX, FULL_COORDS
@@ -79,6 +79,9 @@ INFERENCE_CONFIG = {
     "reduce_dim": DIM_RED_CFG.get("enabled", False),
     "dim_red_method": DIM_RED_CFG.get("method", "pca"),
     "dims_ratio": DIM_RED_CFG.get("pca", {}).get("dims_ratio", 0.5),
+    "append_prev_char": config_data["experiment"].get("append_prev_char_feature", True),
+    "alignment_prev_windows": int(config_data["experiment"].get("alignment_context", {}).get("prev_windows", 0)),
+    "alignment_future_windows": int(config_data["experiment"].get("alignment_context", {}).get("future_windows", 0)),
 }
 
 TRAIN_CFG = config_data.get("train", {})
@@ -248,6 +251,7 @@ def run_inference(
         dims_ratio=INFERENCE_CONFIG["dims_ratio"],
         root_dir=PROJECT_ROOT,
         training_dataset=PROCESSED_TRAINING_DATA,
+        append_prev_char=INFERENCE_CONFIG["append_prev_char"],
     )
 
     input_dim = processed_data.shape[2]
@@ -279,10 +283,45 @@ def run_inference(
 async def process_queues(left_queue, right_queue):
     left_win = SlidingWindow()
     right_win = SlidingWindow()
-    left_all = SlidingWindow(maxlen=1000)
-    right_all = SlidingWindow(maxlen=1000)
+
+    context_prev = max(0, int(INFERENCE_CONFIG["alignment_prev_windows"]))
+    context_future = max(0, int(INFERENCE_CONFIG["alignment_future_windows"]))
+
+    events: List[Dict[str, np.ndarray]] = []
+    event_offset = 0
+    decoded_abs_idx = 0
     prev_char = None
     history_chars: list = []
+
+    async def decode_ready_events():
+        nonlocal event_offset, decoded_abs_idx, prev_char, history_chars
+        if not events:
+            return
+        max_abs_idx = event_offset + len(events) - 1
+        while (decoded_abs_idx + context_future) <= max_abs_idx:
+            start_abs_idx = max(event_offset, decoded_abs_idx - context_prev)
+            end_abs_idx = min(max_abs_idx, decoded_abs_idx + context_future)
+            start_i = start_abs_idx - event_offset
+            end_i = end_abs_idx - event_offset
+
+            left_ctx = np.vstack([events[j]["left"] for j in range(start_i, end_i + 1)])
+            right_ctx = np.vstack([events[j]["right"] for j in range(start_i, end_i + 1)])
+            prev_char = await asyncio.to_thread(
+                run_inference, left_ctx, right_ctx, None, None, prev_char, history_chars
+            )
+            decoded_abs_idx += 1
+
+            if prev_char is not None and LM_HISTORY_LEN > 0:
+                history_chars.append(INDEX_TO_CHAR[prev_char])
+                if len(history_chars) > LM_HISTORY_LEN:
+                    history_chars.pop(0)
+
+            keep_from_abs_idx = max(event_offset, decoded_abs_idx - context_prev)
+            if keep_from_abs_idx > event_offset:
+                drop_n = keep_from_abs_idx - event_offset
+                events[:] = events[drop_n:]
+                event_offset = keep_from_abs_idx
+                max_abs_idx = event_offset + len(events) - 1
 
     while True:
         left_task = asyncio.create_task(left_queue.get())
@@ -313,31 +352,18 @@ async def process_queues(left_queue, right_queue):
         chunk = np.stack(left_win.pop_chunk(idx+1)) if triggered_hand == "left" else np.stack(right_win.pop_chunk(idx+1))
         if chunk.shape[0] <= 2:
             continue
-        pointer = chunk.shape[0]
         timestamp = chunk[-1][-1]
         opp_idx = right_win.timestamp_matched(timestamp=timestamp) if triggered_hand == "left" else left_win.timestamp_matched(timestamp=timestamp)
         if opp_idx:
             opp_chunk = np.stack(right_win.pop_chunk(opp_idx+1)) if triggered_hand == "left" else np.stack(left_win.pop_chunk(opp_idx+1))
         else:
             opp_chunk = np.zeros_like(chunk)
-        opp_pointer = opp_chunk.shape[0]
-        
+
         if triggered_hand == "left":
-            left_all.append(chunk)
-            right_all.append(opp_chunk)
-            prev_char = await asyncio.to_thread(
-                run_inference, chunk, opp_chunk, None, None, prev_char, history_chars
-            )
+            events.append({"left": chunk, "right": opp_chunk})
         else:
-            left_all.append(opp_chunk)
-            right_all.append(chunk)
-            prev_char = await asyncio.to_thread(
-                run_inference, opp_chunk, chunk, None, None, prev_char, history_chars
-            )
-        if prev_char is not None and LM_HISTORY_LEN > 0:
-            history_chars.append(INDEX_TO_CHAR[prev_char])
-            if len(history_chars) > LM_HISTORY_LEN:
-                history_chars.pop(0)
+            events.append({"left": opp_chunk, "right": chunk})
+        await decode_ready_events()
 
 ## ================================================== ##
 
