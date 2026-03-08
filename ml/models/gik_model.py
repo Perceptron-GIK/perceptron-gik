@@ -471,7 +471,7 @@ class GIKTrainer:
             batch_x = batch_x.to(self.device)
             batch_y = batch_y.to(self.device)
 
-            logits = model(batch_x)
+            logits = self.model(batch_x)
             if self.regression:
                 loss = self.criterion(logits, batch_y, raw_labels)
             else:
@@ -501,7 +501,7 @@ class GIKTrainer:
             else:
                 batch_x, batch_y = data
             batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
-            logits = model(batch_x)
+            logits = self.model(batch_x)
             if self.regression:
                 loss = self.criterion(logits, batch_y, raw_labels)
             else:
