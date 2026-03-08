@@ -45,22 +45,34 @@ with open(TRAINING_CONFIG_PATH, "r", encoding="utf-8") as f:
 TRAINING_DATA_DIR = config_data["data"]["data_dir"]
 PROCESSED_TRAINING_DATA = os.path.join(TRAINING_DATA_DIR, "processed_dataset.pt")
 
-EXPERIMENT_MODE = config_data["experiment"]["mode"]
+EXPERIMENT = config_data["experiment"]
+EXPERIMENT_MODE = EXPERIMENT["mode"]
 MODE_CONFIG = config_data["modes"][EXPERIMENT_MODE]
+
+# Resolve output_logits from mode config (e.g. "NUM_CLASSES" -> actual value)
+OUTPUT_LOGITS_REGISTRY = {"NUM_CLASSES": NUM_CLASSES}
+_output_logits = MODE_CONFIG.get("output_logits", "NUM_CLASSES")
+if isinstance(_output_logits, str):
+    _output_logits = OUTPUT_LOGITS_REGISTRY.get(_output_logits, NUM_CLASSES)
 
 TRAINING_CONFIG = {
     **config_data["model"],
-    **MODE_CONFIG    
+    **MODE_CONFIG,
+    "output_logits": _output_logits,
 }
-TRAINING_CONFIG["output_logits"] = NUM_CLASSES
+
+# Inference config derived from experiment (must match training preprocessing)
+DIM_RED_CFG = EXPERIMENT.get("dim_reduction", {})
+NORMALIZE_CFG = EXPERIMENT.get("normalize", True)
+NORMALIZE_ENABLED = NORMALIZE_CFG.get("enabled", True) if isinstance(NORMALIZE_CFG, dict) else bool(NORMALIZE_CFG)
 
 INFERENCE_CONFIG = {
-    "max_seq_length": 19,
-    "normalize": False,
-    "apply_filtering": False,
-    "reduce_dim": False,
-    "dim_red_method": "pca", # Set to None if reduce_dim == False
-    "dims_ratio": 0.5 # Set to 0.0 if dims_red_method != "pca"
+    "max_seq_length": EXPERIMENT.get("max_seq_length", 19),
+    "normalize": NORMALIZE_ENABLED,
+    "apply_filtering": EXPERIMENT.get("apply_filtering", False),
+    "reduce_dim": DIM_RED_CFG.get("enabled", False),
+    "dim_red_method": DIM_RED_CFG.get("method", "pca"),
+    "dims_ratio": DIM_RED_CFG.get("pca", {}).get("dims_ratio", 0.5),
 }
 
 MODEL_PATH = os.path.join(PROJECT_ROOT, "best_model.pt")

@@ -54,11 +54,11 @@ def reduce_dim(
 
     if inference_source is not None:
         data = inference_source
+        # Load metadata from training dataset for col_names (needed for fsr_indices in PCA)
+        meta = torch.load(data_dir, weights_only=False).get("metadata", {})
     else:
-        data = torch.load(data_dir)
-
-
-    meta = data.get("metadata", {})
+        data = torch.load(data_dir, weights_only=False)
+        meta = data.get("metadata", {})
     col_names = meta.get("combined_col_names", [])
     idx = _index_map(col_names)
 
@@ -326,11 +326,13 @@ def pca(data, dims_ratio, output_path, root_dir, cols_dont_reduce, fit_on_train_
         torch.save(pca_params, os.path.join(root_dir, "pca_params.pt"))
 
         output = _apply_pca(samples, mean, components)
+        total_out_dim = output.shape[2]  # dim_aft + num_keep when cols_dont_reduce is non-empty
 
         data["samples"] = output
-        data["metadata"]["feat_dim"] = dim_aft
+        data["metadata"]["feat_dim"] = total_out_dim
         data["normalize"] = False # Avoid normalising again downstream  
         torch.save(data, output_path)
+        dims["dim_aft"] = total_out_dim
         return dims
     else:
         # During Inference Pipeline
