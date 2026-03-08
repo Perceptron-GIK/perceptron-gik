@@ -70,3 +70,18 @@ for _ch in ALL_CHARS:
     else:
         # Fallback for any unexpected character.
         FULL_COORDS[_ch] = (5.3, 4.0)
+
+INITIAL_KEY_COORDS: Dict[str, Tuple[float, float, float]] = { # initial guess for imu position, with z=0.0 for all keys
+    'base_L': (0.0, 0.0, 0.0),
+    'thumb_L': (0.065, 0.055, 0.0),
+    'index_L': (0.047, 0.088, 0.0),
+    'middle_L': (0.020, 0.044, 0.0),
+    'ring_L': (0.001, 0.088, 0.0),
+    'pinky_L': (-0.015, 0.080, 0.0),
+    'base_R': (0.17, 0.0, 0.0),
+    'thumb_R': (0.11, 0.043, 0.0),
+    'index_R': (0.14, 0.090, 0.0),
+    'middle_R': (0.168, 0.096, 0.0),
+    'ring_R': (0.190, 0.085, 0.0),
+    'pinky_R': (0.205, 0.073, 0.0),
+}
