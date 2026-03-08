@@ -299,8 +299,10 @@ class GIKTrainer:
                     syn_weights.append(cls_weights.get(c, 1.0))
 
                 virtual_syn_mult = int(getattr(self.train_dataset_aug, "synthetic_multiplier", 0))
+                use_aug = bool(getattr(self.train_dataset_aug, "use_augmentation", False))
                 use_virtual_syn = (
-                    virtual_syn_mult > 0
+                    use_aug
+                    and virtual_syn_mult > 0
                     and not bool(getattr(self.train_dataset_aug, "precompute_synthetic", False))
                 )
                 if use_virtual_syn:
@@ -309,13 +311,7 @@ class GIKTrainer:
                 weights = torch.tensor(base_weights + syn_weights, dtype=torch.double)
                 sampler = WeightedRandomSampler(weights=weights, num_samples=len(weights), replacement=True)
 
-        self.train_loader = DataLoader(
-            self.train_dataset_aug,
-            batch_size=batch_size,
-            shuffle=(sampler is None),
-            sampler=sampler,
-            num_workers=0,
-        )
+        self.train_loader = DataLoader(self.train_dataset_aug,batch_size=batch_size,shuffle=(sampler is None),sampler=sampler,num_workers=0,)
         self.val_loader = DataLoader(self.val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
         self.test_loader = DataLoader(self.test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
 
@@ -475,7 +471,7 @@ class GIKTrainer:
             batch_x = batch_x.to(self.device)
             batch_y = batch_y.to(self.device)
 
-            logits = model(batch_x)
+            logits = self.model(batch_x)
             if self.regression:
                 loss = self.criterion(logits, batch_y, raw_labels)
             else:
@@ -505,7 +501,7 @@ class GIKTrainer:
             else:
                 batch_x, batch_y = data
             batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
-            logits = model(batch_x)
+            logits = self.model(batch_x)
             if self.regression:
                 loss = self.criterion(logits, batch_y, raw_labels)
             else:
