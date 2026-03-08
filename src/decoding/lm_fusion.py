@@ -128,6 +128,58 @@ def _lm_log_prob_dispatch(lm: Dict[str, object], history_chars: Sequence[str], n
     return math.log(p)
 
 
+def fuse_single_step_logits_with_lm(
+    logits: torch.Tensor,
+    lm: Dict[str, object],
+    history_chars: Sequence[str],
+    beta: float,
+) -> torch.Tensor:
+    """Fuse model logits with LM for single-char inference: fused = logits + beta * lm_log_probs."""
+    if beta <= 0.0:
+        return logits
+    idx_to_char = _idx_to_char_map()
+    lm_lp = torch.zeros_like(logits, dtype=logits.dtype)
+    for i in range(logits.shape[-1]):
+        ch = idx_to_char.get(i, "")
+        if ch:
+            lm_lp[..., i] = _lm_log_prob_dispatch(lm, history_chars, ch)
+    return logits + beta * lm_lp
+
+
+def get_logits_single_tta(
+    x: torch.Tensor,
+    model: torch.nn.Module,
+    device: str,
+    tta_passes: int = 1,
+    noise_std: float = 0.0,
+    scale_jitter: float = 0.0,
+    time_warp: float = 0.0,
+) -> torch.Tensor:
+    """Get logits for single sample with optional TTA. Returns mean logits over passes."""
+    model.eval()
+    passes = max(1, int(tta_passes))
+    scale_jitter = max(0.0, float(scale_jitter))
+    noise_std = max(0.0, float(noise_std))
+    time_warp = max(0.0, float(time_warp))
+    if x.ndim == 2:
+        x = x.unsqueeze(0)
+    x = x.to(device)
+    logits_acc = None
+    with torch.no_grad():
+        for _ in range(passes):
+            x_aug = x
+            if time_warp > 0.0:
+                x_aug = _time_warp(x_aug, time_warp)
+            if scale_jitter > 0.0:
+                scale = (1.0 + scale_jitter * torch.randn(1, device=x.device)).clamp(0.7, 1.3)
+                x_aug = x_aug * scale
+            if noise_std > 0.0:
+                x_aug = x_aug + noise_std * torch.randn_like(x_aug)
+            logits = model(x_aug).squeeze(0)
+            logits_acc = logits if logits_acc is None else (logits_acc + logits)
+    return (logits_acc / float(passes)).detach().cpu()
+
+
 @torch.no_grad()
 def collect_logits_and_labels(
     data_subset,
