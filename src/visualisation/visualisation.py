@@ -56,10 +56,10 @@ def _print_prediction_results(results, subset_name, max_samples):
     print()
 
 
-def get_closest_coordinate(coord, coord_dict):
+def get_closest_coordinate(coord, coord_dict=FULL_COORDS):
     """Return the character with minimum squared distance to coord."""
     if isinstance(coord, torch.Tensor):
-        coord = coord.squeeze().cpu().numpy()
+        coord = coord.detach().squeeze().cpu().numpy()
     coord = np.asarray(coord)
     best_char, best_dist = None, float("inf")
     for char, (cx, cy) in coord_dict.items():
@@ -88,7 +88,7 @@ def show_predictions_coordinate(
     subset_name,
     coord_dict=FULL_COORDS,
     max_samples=50,
-    coord_scale=(9.0, 4.0),
+    coord_scale=(10.0, 4.0),
     apply_sigmoid=True,
 ):
     """Show predictions for coordinate mode by nearest key lookup."""

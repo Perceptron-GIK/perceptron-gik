@@ -27,7 +27,7 @@ from .default_models import (
 )
 from src.Constants.char_to_key import INDEX_TO_CHAR, NUM_CLASSES
 from src.pre_processing.augmentation import GIKAugmentationsPerFeature, AugmentedDataset
-from src.visualisation.visualisation import postprocess_coordinate_output
+from src.visualisation.visualisation import postprocess_coordinate_output, get_closest_coordinate
 from src.decoding.lm_fusion import (
     build_char_ngram_lm,
     build_interpolated_char_lm,
@@ -426,6 +426,11 @@ class GIKTrainer:
                 logits = self.model(batch_x)
             if self.regression:
                 loss = self.criterion(logits, batch_y, raw_labels)
+                coords = [postprocess_coordinate_output(y_pred=logit) for logit in logits]
+                preds = [get_closest_coordinate(x) for x in coords]
+                trues = [get_closest_coordinate(y) for y in batch_y]
+                n_batch = batch_x.size(0)
+                correct += sum([preds[i] == trues[i] for i in range(n_batch)])
             else:
                 targets = batch_y.argmax(dim=-1)
                 if use_mixup:
@@ -451,10 +456,7 @@ class GIKTrainer:
 
             total_loss += loss.item() * batch_x.size(0)
 
-        if self.regression:
-            acc = None
-        else:
-            acc = correct / total if total else 0.0
+        acc = correct / total if total else 0.0
         return total_loss / total if total else 0.0, acc
     
     @torch.no_grad()
@@ -476,17 +478,20 @@ class GIKTrainer:
             logits = self.model(batch_x)
             if self.regression:
                 loss = self.criterion(logits, batch_y, raw_labels)
+                coords = [postprocess_coordinate_output(y_pred=logit) for logit in logits]
+                preds = [get_closest_coordinate(x) for x in coords]
+                trues = [get_closest_coordinate(y) for y in batch_y]
+                n_batch = batch_x.size(0)
+                correct += sum([preds[i] == trues[i] for i in range(n_batch)])    
             else:
                 loss = self.criterion(logits, batch_y.argmax(dim=-1))
                 pred = logits.argmax(dim=-1)
                 correct += (pred == batch_y.argmax(dim=-1)).sum().item()
             total_loss += loss.item() * batch_x.size(0)
             total += batch_x.size(0)
-
-        if self.regression:
-            acc = None
-        else:
+            
             acc = correct / total if total else 0.0
+            
         return total_loss / total if total else 0.0, acc
 
     @torch.no_grad()
@@ -506,6 +511,11 @@ class GIKTrainer:
             logits = self.model(batch_x)
             if self.regression:
                 loss = self.criterion(logits, batch_y, raw_labels)
+                coords = [postprocess_coordinate_output(y_pred=logit) for logit in logits]
+                preds = [get_closest_coordinate(x) for x in coords]
+                trues = [get_closest_coordinate(y) for y in batch_y]
+                n_batch = batch_x.size(0)
+                correct += sum([preds[i] == trues[i] for i in range(n_batch)])
             else:
                 loss = self.criterion(logits, batch_y.argmax(dim=-1))
                 correct += (logits.argmax(dim=-1) == batch_y.argmax(dim=-1)).sum().item()
@@ -601,15 +611,12 @@ class GIKTrainer:
 
             self.history['train_loss'].append(train_loss)
             self.history['val_loss'].append(val_loss)
-            if not self.regression:
-                self.history['train_acc'].append(train_acc)
-                self.history['val_acc'].append(val_acc)
+            self.history['train_acc'].append(train_acc)
+            self.history['val_acc'].append(val_acc)
 
             print(f"Epoch {epoch+1:3d}/{epochs} ")
             print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} ")
-
-            if not self.regression:
-                print(f"Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f} ")
+            print(f"Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f} ")
 
             current_metric = val_acc if use_acc_metric else val_loss
             is_better = (current_metric > best_metric) if use_acc_metric else (current_metric < best_metric)

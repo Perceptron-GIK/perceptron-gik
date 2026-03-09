@@ -66,7 +66,7 @@ class CoordinateLossClassification(nn.Module):
     
     def forward(self, inputs, targets, class_id):
         x = self.sigmoid(inputs)
-        scale = inputs.new_tensor([9.0, 4.0])
+        scale = inputs.new_tensor([10.0, 4.0])
         x = x * scale
 
         diff = x - targets                          # [B, 2]
