@@ -5,6 +5,7 @@ from bleak import BleakScanner, BleakClient
 
 from src.Constants.char_to_key import NUM_CLASSES, INDEX_TO_CHAR, CHAR_TO_INDEX, FULL_COORDS
 from src.inference.sliding_window import SlidingWindow
+from src.inference.autocorrect import AutoCorrector
 from src.visualisation.visualisation import get_closest_coordinate
 from src.decoding.lm_fusion import (
     build_char_ngram_lm,
@@ -104,6 +105,8 @@ MODEL_PATH = os.path.join(PROJECT_ROOT, "best_model.pt")
 DEVICE = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
 
 FSR_INDICES = [12, 19, 26, 33, 40]
+
+AUTOCORRECTOR = AutoCorrector(checker_type="pyspell", max_len=10)
 
 ## ================================================== ##
 # BLUETOOTH FUNCTIONS
@@ -273,12 +276,15 @@ def run_inference(
             if lm is not None and LM_INFERENCE_BETA > 0.0:
                 history = list(history_chars)[-LM_HISTORY_LEN:] if history_chars else []
                 logits = fuse_single_step_logits_with_lm(logits, lm, history, LM_INFERENCE_BETA)
-            prediction = logits.argmax(dim=-1).item()
+            predicted_idx = logits.argmax(dim=-1).item()
         else:
-            prediction = CHAR_TO_INDEX[get_closest_coordinate(model.predict_coords(x.to(DEVICE)), FULL_COORDS)]
+            predicted_idx = CHAR_TO_INDEX[get_closest_coordinate(model.predict_coords(x.to(DEVICE)), FULL_COORDS)]
 
-    print(INDEX_TO_CHAR[prediction], end="")
-    return prediction
+    predicted_char = INDEX_TO_CHAR[predicted_idx]
+    # AUTOCORRECTOR.process_char(predicted_char)
+    sys.stdout.write(predicted_char)
+    sys.stdout.flush()
+    return predicted_idx
     
 async def process_queues(left_queue, right_queue):
     left_win = SlidingWindow()
@@ -304,6 +310,12 @@ async def process_queues(left_queue, right_queue):
             start_i = start_abs_idx - event_offset
             end_i = end_abs_idx - event_offset
 
+            # left_pointer = np.vstack([events[j]["left"] for j in range(start_i, end_i + 1)]).shape[0]
+            # right_pointer = np.vstack([events[j]["right"] for j in range(start_i, end_i + 1)]).shape[0]
+
+            # left_ctx = np.vstack([events[j]["left"] for j in range(end_i + 1)])
+            # right_ctx = np.vstack([events[j]["right"] for j in range(end_i + 1)])
+
             left_ctx = np.vstack([events[j]["left"] for j in range(start_i, end_i + 1)])
             right_ctx = np.vstack([events[j]["right"] for j in range(start_i, end_i + 1)])
             prev_char = await asyncio.to_thread(
@@ -322,7 +334,7 @@ async def process_queues(left_queue, right_queue):
                 events[:] = events[drop_n:]
                 event_offset = keep_from_abs_idx
                 max_abs_idx = event_offset + len(events) - 1
-
+    i =0
     while True:
         left_task = asyncio.create_task(left_queue.get())
         right_task = asyncio.create_task(right_queue.get())
@@ -330,7 +342,6 @@ async def process_queues(left_queue, right_queue):
             [left_task, right_task],
             return_when=asyncio.FIRST_COMPLETED
         )
-
         for task in completed:
             data, t = task.result()
             data = np.asarray(data, dtype=np.float32)
@@ -349,6 +360,9 @@ async def process_queues(left_queue, right_queue):
         idx = left_win.fsr_detected(fsr_indices=FSR_INDICES) if triggered_hand == "left" else right_win.fsr_detected(fsr_indices=FSR_INDICES)
         if idx is None:
             continue
+        else:
+            print(f"FSR DETECTED {i}")
+            i += 1
         chunk = np.stack(left_win.pop_chunk(idx+1)) if triggered_hand == "left" else np.stack(right_win.pop_chunk(idx+1))
         if chunk.shape[0] <= 2:
             continue

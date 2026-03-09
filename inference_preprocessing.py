@@ -30,7 +30,7 @@ IMU_IDX_TO_PART = {
     34: "pinky"
 }
 
-def filter_imu_data(data: np.ndarray) -> np.ndarray:
+def filter_imu_data(data: np.ndarray, part) -> np.ndarray:
     '''
     Apply IMU filtering to a single window of IMU data from one hand
     Returns the processed array
@@ -56,7 +56,7 @@ def filter_imu_data(data: np.ndarray) -> np.ndarray:
             except:
                 a_p = tracker.remove_acc_drift(a, threshold=0.2, filter=False, cof=(0.1, 5))
             vel = tracker.zupt(a_p, threshold=0.2)
-            pos = tracker.track_position(a, vel)
+            pos = tracker.track_position(a, vel, IMU_IDX_TO_PART[imu_col] + part)
 
             a_adjusted = np.nan_to_num(a_p, nan=0.0, posinf=0.0, neginf=0.0)
             pos_adjusted = np.nan_to_num(pos, nan=0.0, posinf=0.0, neginf=0.0)
