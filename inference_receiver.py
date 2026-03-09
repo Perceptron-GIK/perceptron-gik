@@ -1,4 +1,4 @@
-import asyncio, struct, time, os, sys, yaml, torch
+import asyncio, struct, time, os, sys, yaml, torch, re
 import numpy as np
 from typing import Callable, Any, Optional, Dict, List
 from bleak import BleakScanner, BleakClient
@@ -107,6 +107,9 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is
 FSR_INDICES = [12, 19, 26, 33, 40]
 
 AUTOCORRECTOR = AutoCorrector(checker_type="pyspell", max_len=10)
+
+GROUND_TRUTH = "hello world how are you this is our invisible keyboard"
+INFERENCE_PREDICTIONS = ""
 
 ## ================================================== ##
 # BLUETOOTH FUNCTIONS
@@ -281,6 +284,7 @@ def run_inference(
             predicted_idx = CHAR_TO_INDEX[get_closest_coordinate(model.predict_coords(x.to(DEVICE)), FULL_COORDS)]
 
     predicted_char = INDEX_TO_CHAR[predicted_idx]
+    INFERENCE_PREDICTIONS += predicted_char
     # AUTOCORRECTOR.process_char(predicted_char)
     sys.stdout.write(predicted_char)
     sys.stdout.flush()
@@ -334,7 +338,7 @@ async def process_queues(left_queue, right_queue):
                 events[:] = events[drop_n:]
                 event_offset = keep_from_abs_idx
                 max_abs_idx = event_offset + len(events) - 1
-    i =0
+
     while True:
         left_task = asyncio.create_task(left_queue.get())
         right_task = asyncio.create_task(right_queue.get())
@@ -360,9 +364,6 @@ async def process_queues(left_queue, right_queue):
         idx = left_win.fsr_detected(fsr_indices=FSR_INDICES) if triggered_hand == "left" else right_win.fsr_detected(fsr_indices=FSR_INDICES)
         if idx is None:
             continue
-        else:
-            print(f"FSR DETECTED {i}")
-            i += 1
         chunk = np.stack(left_win.pop_chunk(idx+1)) if triggered_hand == "left" else np.stack(right_win.pop_chunk(idx+1))
         if chunk.shape[0] <= 2:
             continue
@@ -379,6 +380,19 @@ async def process_queues(left_queue, right_queue):
             events.append({"left": opp_chunk, "right": chunk})
         await decode_ready_events()
 
+def evaluate_inference(ground_truth, predictions):
+    predictions = re.sub("\b", "", predictions)
+    error, correct = 0, 0
+    seq_length = min(len(ground_truth), len(predictions))
+    for i in range(seq_length):
+        if ground_truth[i] == predictions[i]:
+            correct += 1
+        gt_coords = FULL_COORDS[ground_truth[i]]
+        pred_coords = FULL_COORDS[predictions[i]]
+        error += (gt_coords[0] - pred_coords[0])**2 + (gt_coords[1] - pred_coords[1])**2
+    acc = round((correct/seq_length)**100, 2)
+    return error, acc
+
 ## ================================================== ##
 
 async def main():
@@ -391,4 +405,8 @@ async def main():
                          connect(DEVICE_NAME_R, UUID_TX_R, data_queue_right),
                          process_queues(data_queue_left, data_queue_right))
 
-asyncio.run(main())
+try:
+    asyncio.run(main())
+finally:
+    error, acc = evaluate_inference(GROUND_TRUTH, INFERENCE_PREDICTIONS)
+    print(f"Inference Error: {error}, Inference Accuracy: {acc}%")
