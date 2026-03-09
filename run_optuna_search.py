@@ -156,23 +156,22 @@ def apply_class_weights(config: dict, dataset_path: Path) -> dict:
 def suggest_trial_params(trial: optuna.Trial, base_config: dict) -> dict:
     cfg = copy.deepcopy(base_config)
 
-    cfg.setdefault("dim_reduction", {})
-    # Keep dim reduction fixed to PCA for compatibility with existing studies.
-    # Changing categorical choices under the same study causes dynamic-space errors.
-    cfg["dim_reduction"]["method"] = "pca"
-    cfg["dim_reduction"].setdefault("pca", {})
-    cfg["dim_reduction"]["pca"]["dims_ratio"] = trial.suggest_float(
-        "experiment.dim_reduction.pca.dims_ratio", 0.2, 0.8, step=0.1
-    )
+    # cfg.setdefault("dim_reduction", {})
+    # # Keep dim reduction fixed to PCA for compatibility with existing studies.
+    # # Changing categorical choices under the same study causes dynamic-space errors.
+    # cfg["dim_reduction"]["method"] = "pca"
+    # cfg["dim_reduction"].setdefault("pca", {})
+    # cfg["dim_reduction"]["pca"]["dims_ratio"] = trial.suggest_float(
+    #     "experiment.dim_reduction.pca.dims_ratio", 0.2, 0.8, step=0.1
+    # )
 
     cfg["model_type"] = trial.suggest_categorical(
-        # "model_type", ["attention_lstm", "lstm", "gru", "transformer", "cnn", "rnn", "glove_typing"]
-        "model_type", ["glove_typing"]
+        "model_type", ["attention_lstm", "lstm","glove_typing"]
     )
     # cfg["normalize"] = trial.suggest_categorical("experiment.normalize", [True, False])
-    cfg["apply_filtering"] = trial.suggest_categorical(
-        "experiment.apply_filtering", [True, False]
-    )
+    # cfg["apply_filtering"] = trial.suggest_categorical(
+    #     "experiment.apply_filtering", [True, False]
+    # )
     cfg["max_seq_length"] = trial.suggest_categorical(
         "experiment.max_seq_length", [-1] + list(range(6, 21))
     )
@@ -209,31 +208,31 @@ def suggest_trial_params(trial: optuna.Trial, base_config: dict) -> dict:
     # model family (e.g., num_heads) are never forwarded accidentally.
     inner_cfg = {"dropout": trial.suggest_float("inner_model_prams.dropout", 0.1, 0.8)}
 
-    if model_type in ["lstm", "gru", "attention_lstm", "rnn", "transformer"]:
+    if model_type in ["lstm","attention_lstm"]:
         inner_cfg["num_layers"] = trial.suggest_int("inner_model_prams.num_layers", 1, 5)
 
-    if model_type in ["lstm", "gru", "attention_lstm", "rnn"]:
-        inner_cfg["bidirectional"] = trial.suggest_categorical(
-            "inner_model_prams.bidirectional", [True, False]
-        )
+    # if model_type in ["lstm", "gru", "attention_lstm", "rnn"]:
+    #     inner_cfg["bidirectional"] = trial.suggest_categorical(
+    #         "inner_model_prams.bidirectional", [True, False]
+    #     )
 
-    if model_type in ["transformer", "attention_lstm"]:
+    if model_type in ["attention_lstm"]:
         inner_cfg["num_heads"] = trial.suggest_categorical(
             "inner_model_prams.num_heads", [2, 4, 8, 16, 32]
         )
 
-    if model_type == "cnn":
-        kernel_size_options = {
-            "k357": [3, 5, 7],
-            "k335": [3, 3, 5],
-            "k579": [5, 7, 9],
-            "k35": [3, 5],
-        }
-        kernel_choice = trial.suggest_categorical(
-            "inner_model_prams.kernel_sizes_choice",
-            list(kernel_size_options.keys()),
-        )
-        inner_cfg["kernel_sizes"] = kernel_size_options[kernel_choice]
+    # if model_type == "cnn":
+    #     kernel_size_options = {
+    #         "k357": [3, 5, 7],
+    #         "k335": [3, 3, 5],
+    #         "k579": [5, 7, 9],
+    #         "k35": [3, 5],
+    #     }
+    #     kernel_choice = trial.suggest_categorical(
+    #         "inner_model_prams.kernel_sizes_choice",
+    #         list(kernel_size_options.keys()),
+    #     )
+    #     inner_cfg["kernel_sizes"] = kernel_size_options[kernel_choice]
 
     if model_type == "glove_typing":
         inner_cfg["num_res_blocks"] = trial.suggest_int(
