@@ -1,29 +1,29 @@
 data:
-  data_dir: data_hazel_7
+  data_dir: data_jun_4
   keyboard_files:
-    - "Keyboard_20.csv"
+    - "Keyboard_53.csv"
   left_files:
-    - "Left_20.csv"
+    - "Left_53.csv"
   right_files:
-    - "Right_14.csv"
+    - "Right_53.csv"
 
 experiment:
   mode: "classification" # "coordinate" or "classification"
   alignment_context:
     prev_windows: 0
-    future_windows: 1
-  append_prev_char_feature: true
+    future_windows: 0
+  append_prev_char_feature: false
   max_seq_length: 12
   normalize: 
-    enabled: true
-    per_seq: true
+    enabled: false
+    per_seq: false
   apply_filtering: true
   use_class_weights: false
   dim_reduction:
-    enabled: true
+    enabled: false
     method: pca
     pca:
-      dims_ratio: 0.4
+      dims_ratio: 0.6
       fit_on_train_only: true
       train_ratio: 0.8
       use_fsr: false
@@ -32,39 +32,40 @@ experiment:
   export_dataset_csv: true
 
 model:
-  model_type: "glove_typing"
-  hidden_dim_inner_model: 512
-  hidden_dim_classification_head: 256
+  model_type: "lstm"
+  hidden_dim_inner_model: 1024
+  hidden_dim_classification_head: 512
   num_layers: 2
-  dropout: 0.5
+  dropout: 0.362741456039648
   inner_model_prams:
     dropout: 0.33580103298003944
-    attn_reduction: 8
-    num_res_blocks: 4
+    num_layers: 2
+    bidirectional: false
+    # num_heads: 8
 
 train:
-  split_strategy: "contiguous"  # "stratified_random" | "contiguous"
+  split_strategy: "stratified_random"  # "stratified_random" | "contiguous"
   split_seed: 42
-  use_weighted_sampler: false
+  use_weighted_sampler: true
   synthetic_multiplier: 2
-  precompute_synthetic: false
-  mixup_alpha: 1.0
+  precompute_synthetic: true
+  mixup_alpha: 0
   use_ema: true              # true/false — use EMA of params for val/test; val uses EMA model
   ema_decay: 0.998            # (0, 1] — higher = smoother; typical 0.99–0.999
   early_stopping_metric: "val_acc"
   lm_order: 3                 # int >= 1 — n-gram order (3 = trigram, context of 2 chars)
   lm_add_k: 0.05              # float > 0 — additive smoothing for LM; typical 0.01–0.1
-  lm_beam_width: 25           # int >= 1 — beam size for sequence decoding (eval only)
+  lm_beam_width: 20           # int >= 1 — beam size for sequence decoding (eval only)
   lm_beta_values: [0.0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 0.7, 0.9, 1.0]  # list of floats — beta values to sweep for LM fusion tuning
   lm_use_interpolated: true   # true/false — interpolate orders 1..lm_order for LM
   lm_fusion_inference: true   # true/false — enable LM fusion in real-time inference
   lm_inference_beta: 0.4      # float >= 0 — LM weight in inference; 0 = no LM; tune from eval output
   lm_tta_passes: 5            # int >= 1 — TTA passes; 1 = no TTA; >1 averages over augmented forwards
   lm_tta_noise_std: 0.01       # float >= 0 — Gaussian noise std for TTA; 0 = no noise
-  lm_tta_scale_jitter: 0.1    # float >= 0 — scale jitter for TTA; 0 = no jitter
+  lm_tta_scale_jitter: 0.0    # float >= 0 — scale jitter for TTA; 0 = no jitter
   sequence_lm_beta: 0.3       # float >= 0 — in-training auxiliary LM loss weight; 0 = disabled
-  sequence_aux_weight: 0.5    # (0, 1] — weight of aux LM loss when sequence_lm_beta > 0
-  reverse_time_aug_prob: 0.3  # float [0, 1] — probability of reverse-time augmentation
+  sequence_aux_weight: 0.0    # (0, 1] — weight of aux LM loss when sequence_lm_beta > 0
+  reverse_time_aug_prob: 0.2  # float [0, 1] — probability of reverse-time augmentation
   batch_size: 32
   learning_rate: 0.0003228602342701459
   weight_decay: 1.2417981404367497e-05
@@ -94,5 +95,3 @@ modes:
     loss_params:
       h_v_ratio: 0.8
       bias: 0.3
- 
- 

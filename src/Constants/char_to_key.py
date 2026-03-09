@@ -11,9 +11,9 @@ _idx = 0
 for c in LETTER_CHARS:
     CHAR_TO_INDEX[c] = _idx
     _idx += 1
-for c in DIGIT_CHARS:
-    CHAR_TO_INDEX[c] = _idx
-    _idx += 1
+# for c in DIGIT_CHARS:
+#     CHAR_TO_INDEX[c] = _idx
+#     _idx += 1
 for c in SPECIAL_CHARS:
     CHAR_TO_INDEX[c] = _idx
     _idx += 1
