@@ -1,11 +1,18 @@
 import asyncio, struct, time, os, sys, yaml, torch
 import numpy as np
-from typing import Callable, Any
+from typing import Callable, Any, Optional, Dict, List
 from bleak import BleakScanner, BleakClient
 
 from src.Constants.char_to_key import NUM_CLASSES, INDEX_TO_CHAR, CHAR_TO_INDEX, FULL_COORDS
 from src.inference.sliding_window import SlidingWindow
+from src.inference.autocorrect import AutoCorrector
 from src.visualisation.visualisation import get_closest_coordinate
+from src.decoding.lm_fusion import (
+    build_char_ngram_lm,
+    build_interpolated_char_lm,
+    fuse_single_step_logits_with_lm,
+    get_logits_single_tta,
+)
 from inference_preprocessing import preprocess
 from ml.models.gik_model import create_model
 
@@ -45,29 +52,61 @@ with open(TRAINING_CONFIG_PATH, "r", encoding="utf-8") as f:
 TRAINING_DATA_DIR = config_data["data"]["data_dir"]
 PROCESSED_TRAINING_DATA = os.path.join(TRAINING_DATA_DIR, "processed_dataset.pt")
 
-EXPERIMENT_MODE = config_data["experiment"]["mode"]
+EXPERIMENT = config_data["experiment"]
+EXPERIMENT_MODE = EXPERIMENT["mode"]
 MODE_CONFIG = config_data["modes"][EXPERIMENT_MODE]
+
+# Resolve output_logits from mode config (e.g. "NUM_CLASSES" -> actual value)
+OUTPUT_LOGITS_REGISTRY = {"NUM_CLASSES": NUM_CLASSES}
+_output_logits = MODE_CONFIG.get("output_logits", "NUM_CLASSES")
+if isinstance(_output_logits, str):
+    _output_logits = OUTPUT_LOGITS_REGISTRY.get(_output_logits, NUM_CLASSES)
 
 TRAINING_CONFIG = {
     **config_data["model"],
-    **MODE_CONFIG    
+    **MODE_CONFIG,
+    "output_logits": _output_logits,
 }
-TRAINING_CONFIG["output_logits"] = NUM_CLASSES
+
+# Inference config derived from experiment (must match training preprocessing)
+DIM_RED_CFG = EXPERIMENT.get("dim_reduction", {})
+NORMALIZE_CFG = EXPERIMENT.get("normalize", True)
+NORMALIZE_ENABLED = NORMALIZE_CFG.get("enabled", True) if isinstance(NORMALIZE_CFG, dict) else bool(NORMALIZE_CFG)
 
 INFERENCE_CONFIG = {
-    "max_seq_length": 19,
-    "normalize": False,
-    "apply_filtering": False,
-    "reduce_dim": False,
-    "dim_red_method": "pca", # Set to None if reduce_dim == False
-    "dims_ratio": 0.5 # Set to 0.0 if dims_red_method != "pca"
+    "max_seq_length": EXPERIMENT.get("max_seq_length", 19),
+    "normalize": NORMALIZE_ENABLED,
+    "apply_filtering": EXPERIMENT.get("apply_filtering", False),
+    "reduce_dim": DIM_RED_CFG.get("enabled", False),
+    "dim_red_method": DIM_RED_CFG.get("method", "pca"),
+    "dims_ratio": DIM_RED_CFG.get("pca", {}).get("dims_ratio", 0.5),
+    "append_prev_char": config_data["experiment"].get("append_prev_char_feature", True),
+    "alignment_prev_windows": int(config_data["experiment"].get("alignment_context", {}).get("prev_windows", 0)),
+    "alignment_future_windows": int(config_data["experiment"].get("alignment_context", {}).get("future_windows", 0)),
 }
+
+TRAIN_CFG = config_data.get("train", {})
+# LM fusion for real-time inference (classification only)
+LM_FUSION_ENABLED = EXPERIMENT_MODE == "classification" and TRAIN_CFG.get("lm_fusion_inference", False)
+LM_INFERENCE_BETA = float(TRAIN_CFG.get("lm_inference_beta", 0.4))
+LM_ORDER = int(TRAIN_CFG.get("lm_order", 3))
+LM_HISTORY_LEN = max(0, LM_ORDER - 1)
+LM_ADD_K = float(TRAIN_CFG.get("lm_add_k", 0.05))
+LM_USE_INTERPOLATED = bool(TRAIN_CFG.get("lm_use_interpolated", True))
+TTA_PASSES = max(1, int(TRAIN_CFG.get("lm_tta_passes", 1)))
+TTA_NOISE_STD = float(TRAIN_CFG.get("lm_tta_noise_std", 0.0))
+TTA_SCALE_JITTER = float(TRAIN_CFG.get("lm_tta_scale_jitter", 0.0))
+
+_INFERENCE_LM: Optional[dict] = None
+_INFERENCE_MODEL: Optional[torch.nn.Module] = None
 
 MODEL_PATH = os.path.join(PROJECT_ROOT, "best_model.pt")
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
 
 FSR_INDICES = [12, 19, 26, 33, 40]
+
+AUTOCORRECTOR = AutoCorrector(checker_type="pyspell", max_len=10)
 
 ## ================================================== ##
 # BLUETOOTH FUNCTIONS
@@ -145,63 +184,157 @@ async def connect(device_name, uuid, queue):
 ## ================================================== ##
 # INFERENCE FUNCTIONS
 
-def run_inference(
-    left: np.ndarray=None,
-    right: np.ndarray=None,
-    left_pointer: int=None,
-    right_pointer: int=None,
-    prev_char: Any=None
-):
-    processed_data = preprocess(
-        left_data = left,
-        right_data = right,
-        left_pointer = left_pointer,
-        right_pointer = right_pointer,
-        prev_char = prev_char,
-        mode = EXPERIMENT_MODE,
-        max_seq_length = INFERENCE_CONFIG["max_seq_length"],
-        normalize = INFERENCE_CONFIG["normalize"],
-        apply_filtering = INFERENCE_CONFIG["apply_filtering"],
-        apply_dim_reduction = INFERENCE_CONFIG["reduce_dim"],
-        dim_red_method = INFERENCE_CONFIG["dim_red_method"],
-        dims_ratio = INFERENCE_CONFIG["dims_ratio"],
-        root_dir = PROJECT_ROOT,
-        training_dataset = PROCESSED_TRAINING_DATA
-    )
+def _get_inference_lm() -> Optional[dict]:
+    """Build LM from training labels (cached)."""
+    global _INFERENCE_LM
+    if _INFERENCE_LM is not None:
+        return _INFERENCE_LM
+    if not LM_FUSION_ENABLED:
+        return None
+    try:
+        data = torch.load(PROCESSED_TRAINING_DATA, weights_only=False)
+        labels = data.get("labels", [])
+        if not isinstance(labels, list) or len(labels) == 0:
+            return None
+        if LM_USE_INTERPOLATED and LM_ORDER > 1:
+            _INFERENCE_LM = build_interpolated_char_lm(labels, max_order=LM_ORDER, add_k=LM_ADD_K)
+        else:
+            _INFERENCE_LM = build_char_ngram_lm(labels, order=LM_ORDER, add_k=LM_ADD_K)
+        return _INFERENCE_LM
+    except Exception as e:
+        print(f"LM build failed: {e}, disabling LM fusion")
+        return None
 
-    input_dim = processed_data.shape[2]
-
+def _get_inference_model(input_dim: int):
+    """Load and cache model (reused across inferences)."""
+    global _INFERENCE_MODEL
+    if _INFERENCE_MODEL is not None and getattr(_INFERENCE_MODEL, "_gik_input_dim", None) == input_dim:
+        return _INFERENCE_MODEL
     model = create_model(
-        model_type = TRAINING_CONFIG["model_type"],
-        hidden_dim_inner_model = TRAINING_CONFIG['hidden_dim_inner_model'],
-        hidden_dim_classification_head = TRAINING_CONFIG['hidden_dim_classification_head'],
-        no_layers_classification_head = TRAINING_CONFIG['num_layers'],
-        dropout_inner_layers = TRAINING_CONFIG['dropout'],
-        inner_model_kwargs = TRAINING_CONFIG['inner_model_prams'],
-        output_logits = TRAINING_CONFIG['output_logits'],
-        input_dim = input_dim
+        model_type=TRAINING_CONFIG["model_type"],
+        hidden_dim_inner_model=TRAINING_CONFIG["hidden_dim_inner_model"],
+        hidden_dim_classification_head=TRAINING_CONFIG["hidden_dim_classification_head"],
+        no_layers_classification_head=TRAINING_CONFIG["num_layers"],
+        dropout_inner_layers=TRAINING_CONFIG["dropout"],
+        inner_model_kwargs=TRAINING_CONFIG["inner_model_prams"],
+        output_logits=TRAINING_CONFIG["output_logits"],
+        input_dim=input_dim,
     )
-
     model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False))
     model.to(DEVICE)
     model.eval()
+    model._gik_input_dim = input_dim
+    _INFERENCE_MODEL = model
+    return model
+
+def run_inference(
+    left: np.ndarray = None,
+    right: np.ndarray = None,
+    left_pointer: int = None,
+    right_pointer: int = None,
+    prev_char: Any = None,
+    history_chars: Optional[list] = None,
+):
+    """
+    prev_char: index of previous char (for preprocess input feature)
+    history_chars: list of last (lm_order-1) chars for LM context
+    """
+    processed_data = preprocess(
+        left_data=left,
+        right_data=right,
+        left_pointer=left_pointer,
+        right_pointer=right_pointer,
+        prev_char=prev_char,
+        mode=EXPERIMENT_MODE,
+        max_seq_length=INFERENCE_CONFIG["max_seq_length"],
+        normalize=INFERENCE_CONFIG["normalize"],
+        apply_filtering=INFERENCE_CONFIG["apply_filtering"],
+        apply_dim_reduction=INFERENCE_CONFIG["reduce_dim"],
+        dim_red_method=INFERENCE_CONFIG["dim_red_method"],
+        dims_ratio=INFERENCE_CONFIG["dims_ratio"],
+        root_dir=PROJECT_ROOT,
+        training_dataset=PROCESSED_TRAINING_DATA,
+        append_prev_char=INFERENCE_CONFIG["append_prev_char"],
+    )
+
+    input_dim = processed_data.shape[2]
+    model = _get_inference_model(input_dim)
+    x = processed_data if torch.is_tensor(processed_data) else torch.tensor(processed_data, dtype=torch.float32)
 
     with torch.no_grad():
         if EXPERIMENT_MODE == "classification":
-            prediction = model.predict(processed_data).item()
+            if TTA_PASSES > 1 or TTA_NOISE_STD > 0.0 or TTA_SCALE_JITTER > 0.0:
+                logits = get_logits_single_tta(
+                    x, model, str(DEVICE),
+                    tta_passes=TTA_PASSES,
+                    noise_std=TTA_NOISE_STD,
+                    scale_jitter=TTA_SCALE_JITTER,
+                )
+            else:
+                logits = model(x.to(DEVICE)).squeeze(0).cpu()
+            lm = _get_inference_lm()
+            if lm is not None and LM_INFERENCE_BETA > 0.0:
+                history = list(history_chars)[-LM_HISTORY_LEN:] if history_chars else []
+                logits = fuse_single_step_logits_with_lm(logits, lm, history, LM_INFERENCE_BETA)
+            predicted_idx = logits.argmax(dim=-1).item()
         else:
-            prediction = CHAR_TO_INDEX[get_closest_coordinate(model.predict_coords(processed_data), FULL_COORDS)]
+            predicted_idx = CHAR_TO_INDEX[get_closest_coordinate(model.predict_coords(x.to(DEVICE)), FULL_COORDS)]
 
-    print(INDEX_TO_CHAR[prediction], end="")
-    return prediction
+    predicted_char = INDEX_TO_CHAR[predicted_idx]
+    # AUTOCORRECTOR.process_char(predicted_char)
+    sys.stdout.write(predicted_char)
+    sys.stdout.flush()
+    return predicted_idx
     
 async def process_queues(left_queue, right_queue):
     left_win = SlidingWindow()
     right_win = SlidingWindow()
-    left_all = SlidingWindow(maxlen=1000)
-    right_all = SlidingWindow(maxlen=1000)
-    prev_char = None
 
+    context_prev = max(0, int(INFERENCE_CONFIG["alignment_prev_windows"]))
+    context_future = max(0, int(INFERENCE_CONFIG["alignment_future_windows"]))
+
+    events: List[Dict[str, np.ndarray]] = []
+    event_offset = 0
+    decoded_abs_idx = 0
+    prev_char = None
+    history_chars: list = []
+
+    async def decode_ready_events():
+        nonlocal event_offset, decoded_abs_idx, prev_char, history_chars
+        if not events:
+            return
+        max_abs_idx = event_offset + len(events) - 1
+        while (decoded_abs_idx + context_future) <= max_abs_idx:
+            start_abs_idx = max(event_offset, decoded_abs_idx - context_prev)
+            end_abs_idx = min(max_abs_idx, decoded_abs_idx + context_future)
+            start_i = start_abs_idx - event_offset
+            end_i = end_abs_idx - event_offset
+
+            # left_pointer = np.vstack([events[j]["left"] for j in range(start_i, end_i + 1)]).shape[0]
+            # right_pointer = np.vstack([events[j]["right"] for j in range(start_i, end_i + 1)]).shape[0]
+
+            # left_ctx = np.vstack([events[j]["left"] for j in range(end_i + 1)])
+            # right_ctx = np.vstack([events[j]["right"] for j in range(end_i + 1)])
+
+            left_ctx = np.vstack([events[j]["left"] for j in range(start_i, end_i + 1)])
+            right_ctx = np.vstack([events[j]["right"] for j in range(start_i, end_i + 1)])
+            prev_char = await asyncio.to_thread(
+                run_inference, left_ctx, right_ctx, None, None, prev_char, history_chars
+            )
+            decoded_abs_idx += 1
+
+            if prev_char is not None and LM_HISTORY_LEN > 0:
+                history_chars.append(INDEX_TO_CHAR[prev_char])
+                if len(history_chars) > LM_HISTORY_LEN:
+                    history_chars.pop(0)
+
+            keep_from_abs_idx = max(event_offset, decoded_abs_idx - context_prev)
+            if keep_from_abs_idx > event_offset:
+                drop_n = keep_from_abs_idx - event_offset
+                events[:] = events[drop_n:]
+                event_offset = keep_from_abs_idx
+                max_abs_idx = event_offset + len(events) - 1
+    i =0
     while True:
         left_task = asyncio.create_task(left_queue.get())
         right_task = asyncio.create_task(right_queue.get())
@@ -209,7 +342,6 @@ async def process_queues(left_queue, right_queue):
             [left_task, right_task],
             return_when=asyncio.FIRST_COMPLETED
         )
-
         for task in completed:
             data, t = task.result()
             data = np.asarray(data, dtype=np.float32)
@@ -228,28 +360,24 @@ async def process_queues(left_queue, right_queue):
         idx = left_win.fsr_detected(fsr_indices=FSR_INDICES) if triggered_hand == "left" else right_win.fsr_detected(fsr_indices=FSR_INDICES)
         if idx is None:
             continue
+        else:
+            print(f"FSR DETECTED {i}")
+            i += 1
         chunk = np.stack(left_win.pop_chunk(idx+1)) if triggered_hand == "left" else np.stack(right_win.pop_chunk(idx+1))
         if chunk.shape[0] <= 2:
             continue
-        pointer = chunk.shape[0]
         timestamp = chunk[-1][-1]
         opp_idx = right_win.timestamp_matched(timestamp=timestamp) if triggered_hand == "left" else left_win.timestamp_matched(timestamp=timestamp)
         if opp_idx:
             opp_chunk = np.stack(right_win.pop_chunk(opp_idx+1)) if triggered_hand == "left" else np.stack(left_win.pop_chunk(opp_idx+1))
         else:
             opp_chunk = np.zeros_like(chunk)
-        opp_pointer = opp_chunk.shape[0]
-        
+
         if triggered_hand == "left":
-            left_all.append(chunk)
-            right_all.append(opp_chunk)
-            # prev_char = await asyncio.to_thread(run_inference, np.vstack(tuple(left_all.data)), np.vstack(tuple(right_all.data)), pointer, opp_pointer, prev_char)
-            prev_char = await asyncio.to_thread(run_inference, chunk, opp_chunk, None, None, prev_char)
+            events.append({"left": chunk, "right": opp_chunk})
         else:
-            left_all.append(opp_chunk)
-            right_all.append(chunk)
-            # prev_char = await asyncio.to_thread(run_inference, np.vstack(tuple(left_all.data)), np.vstack(tuple(right_all.data)), opp_pointer, pointer, prev_char)
-            prev_char = await asyncio.to_thread(run_inference, opp_chunk, chunk, None, None, prev_char)
+            events.append({"left": opp_chunk, "right": chunk})
+        await decode_ready_events()
 
 ## ================================================== ##
 

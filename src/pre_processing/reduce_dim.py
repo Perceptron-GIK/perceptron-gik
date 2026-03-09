@@ -23,7 +23,10 @@ def reduce_dim(
         normalize: bool = "False",
         output_path: Optional[str] = None,
         dims_ratio: Optional[float] = None,
-        root_dir: Optional[str] = None
+        root_dir: Optional[str] = None,
+        fit_on_train_only: bool = True,
+        train_ratio: float = 0.8,
+        dont_reduce_fsr_pca: bool = False,
 ) -> Dict[str, int]:
     """
     Applies dimensionality reduction to the preprocessed dataset
@@ -38,6 +41,8 @@ def reduce_dim(
         output_path: Path of output file generated from dimensionality reduction (during training only)
         dims_ratio: Proportion of dimensions to keep (for PCA only)
         root_dir: Project root (for PCA only)
+        fit_on_train_only: Whether PCA should be fit only on train windows (prevents leakage)
+        train_ratio: Fraction of windows treated as training data for PCA fitting
 
     If reading data from a PyTorch file:
         Returns: dims dictionary with feature dimension before and after dimensionality reduction
@@ -49,24 +54,34 @@ def reduce_dim(
 
     if inference_source is not None:
         data = inference_source
+        # Load metadata from training dataset for col_names (needed for fsr_indices in PCA)
+        meta = torch.load(data_dir, weights_only=False).get("metadata", {})
     else:
-        data = torch.load(data_dir)
+        data = torch.load(data_dir, weights_only=False)
+        meta = data.get("metadata", {})
+    col_names = meta.get("combined_col_names", [])
+    idx = _index_map(col_names)
+
+    fsr_cols = [c for c in col_names if c.startswith("f_")]
+    fsr_indices = torch.tensor([idx[c] for c in fsr_cols], dtype=torch.long)
 
     if method == "active-imu":
-        return active_imu_only(data_dir, inference_source, has_left, has_right, normalize, output_path)
+        return active_imu_only(data,col_names, inference_source, has_left, has_right, normalize, output_path)
     elif method == "pca":
-        return pca(data, dims_ratio, output_path, root_dir)
+        return pca(
+            data,
+            dims_ratio,
+            output_path,
+            root_dir,
+            fsr_indices if dont_reduce_fsr_pca else torch.tensor([]),
+            fit_on_train_only=fit_on_train_only,
+            train_ratio=train_ratio,
+        )
     else:
         raise Exception("Invalid dimensionality reduction method.")
 
 # Reduces feature dimension by keeping only data from the active and base IMUs
-def active_imu_only(data_dir, inference_source, has_left, has_right, normalize, output_path):
-    data = torch.load(data_dir)
-    meta = data.get("metadata", {})
-    col_names = meta.get("combined_col_names", [])
-    if not col_names:
-        raise ValueError("metadata['combined_col_names'] is required for active-imu reduction")
-
+def active_imu_only(data, col_names, inference_source, has_left, has_right, normalize, output_path):
     idx = _index_map(col_names)
 
     fsr_cols = [c for c in col_names if c.startswith("f_")]
@@ -223,43 +238,105 @@ def active_imu_only(data_dir, inference_source, has_left, has_right, normalize, 
         return dims
     else:
         return output
+    
+def _fit_pca_components(samples: torch.Tensor, dim_aft: int, fit_on_train_only: bool, train_ratio: float, cols_dont_reduce: torch.Tensor ):
+    """Figure out the dimensions to retain after applying PCA
 
-def pca(data, dims_ratio, output_path, root_dir):
+    Args:
+        samples (torch.Tensor): The preprocessed data samples
+        dim_aft (int): The Number of dimensions we want to retain after PCA
+        fit_on_train_only (bool): Whether we want PCA to only fit on training samples
+        train_ratio (float): What is the ratio we are using for Causal Train-Val-Test Split
+        cols_dont_reduce (torch.Tensor): The indices of the column that we do not want to reduce, like FSR
+
+    Returns:
+        _type_: _description_
+    """
+    W, T, D = samples.shape
+    device = samples.device
+
+    if fit_on_train_only:
+        fit_windows = max(1, int(W * train_ratio))
+    else:
+        fit_windows = W
+
+    cols_dont_reduce = cols_dont_reduce.to(device=device, dtype=torch.long)
+
+    all_cols = torch.arange(D, device=device)
+    reduce_mask = torch.ones(D, dtype=torch.bool, device=device)
+    reduce_mask[cols_dont_reduce] = False
+    cols_reduce = all_cols[reduce_mask]
+
+    fit_data = samples[:fit_windows].reshape(-1, D)
+
+    fit_data_reduce = fit_data[:, cols_reduce]
+
+    mean_reduce = fit_data_reduce.mean(dim=0, keepdim=True)
+    centered = fit_data_reduce - mean_reduce
+
+    _, _, vh = torch.linalg.svd(centered, full_matrices=False)
+    pca_components = vh[:dim_aft].T.contiguous()
+
+    num_keep = cols_dont_reduce.numel()
+    total_out_dim = dim_aft + num_keep
+
+    mean = torch.zeros(1, D, device=device, dtype=samples.dtype)
+    mean[:, cols_reduce] = mean_reduce
+
+    components = torch.zeros(D, total_out_dim, device=device, dtype=samples.dtype)
+    components[cols_reduce, :dim_aft] = pca_components
+    components[cols_dont_reduce, dim_aft:] = torch.eye(
+        num_keep, device=device, dtype=samples.dtype
+    )
+
+    return mean, components
+
+
+
+def _apply_pca(samples: torch.Tensor, mean: torch.Tensor, components: torch.Tensor) -> torch.Tensor:
+    W, R, _ = samples.shape
+    dim_aft = components.shape[1]
+    samples = torch.cat([w for w in samples], dim=0)
+    samples_centered = samples - mean
+    output = torch.matmul(samples_centered, components)    
+    return output.reshape(W, R, components.shape[1])
+
+
+def pca(data, dims_ratio, output_path, root_dir, cols_dont_reduce, fit_on_train_only=True, train_ratio=0.8):
     if isinstance(data, dict):
         samples = data["samples"]
 
         W, R, C = samples.shape # (nWindows, nRows, nCols)
 
         dim_bef = C
-        dim_aft = int(dim_bef*dims_ratio)
+        dim_aft = max(1, int(dim_bef * dims_ratio))
         dims = {
             "dim_bef": dim_bef,
             "dim_aft": dim_aft
         }
 
-        all_samples = torch.cat([w for w in samples], dim=0)
-        mean = all_samples.mean(dim=0, keepdim=True)
-        samples_centered = all_samples - mean
-        U, S, V = torch.svd(samples_centered)
-        components = V[:, :dim_aft]
+        mean, components = _fit_pca_components(samples=samples,dim_aft=dim_aft,fit_on_train_only=fit_on_train_only,train_ratio=train_ratio, cols_dont_reduce = cols_dont_reduce )
 
         pca_params = {
             "mean": mean,
-            "components": components
+            "components": components,
+            "fit_on_train_only": bool(fit_on_train_only),
+            "train_ratio": float(train_ratio),
         }
         torch.save(pca_params, os.path.join(root_dir, "pca_params.pt"))
 
-        output = torch.matmul(samples_centered, components)
-        output = output.reshape(W, R, dim_aft)
+        output = _apply_pca(samples, mean, components)
+        total_out_dim = output.shape[2]  # dim_aft + num_keep when cols_dont_reduce is non-empty
 
         data["samples"] = output
-        data["metadata"]["feat_dim"] = dim_aft
+        data["metadata"]["feat_dim"] = total_out_dim
         data["normalize"] = False # Avoid normalising again downstream  
         torch.save(data, output_path)
+        dims["dim_aft"] = total_out_dim
         return dims
     else:
-        W, R, C = data.shape
-        samples = torch.cat([w for w in data], dim=0)
+        # During Inference Pipeline
+        samples = data
 
         params_path = os.path.join(root_dir, "pca_params.pt")
         if not os.path.exists(params_path):
@@ -268,8 +345,6 @@ def pca(data, dims_ratio, output_path, root_dir):
         pca_params = torch.load(os.path.join(root_dir, "pca_params.pt"), weights_only=False)
         mean = pca_params["mean"]
         components = pca_params["components"]
-        samples_centered = samples - mean
-        output = torch.matmul(samples_centered, components)
+        output = _apply_pca(samples, mean, components)
 
-        return output.reshape(W, R, components.shape[1])   
-    
+        return output

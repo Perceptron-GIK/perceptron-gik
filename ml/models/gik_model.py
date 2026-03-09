@@ -11,14 +11,16 @@ Usage:
 """
 import os
 import sys
+import copy
 
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torch.utils.data import Dataset, DataLoader, random_split, Subset
+from torch.utils.data import Dataset, DataLoader, random_split, Subset, WeightedRandomSampler
 from torch import optim
 import numpy as np
 from typing import Optional, Tuple, List, Dict, Any
+from collections import defaultdict, Counter
 from .default_models import (
     TransformerModel, AttentionLSTM, LSTMModel, GRUModel, RNNModel, CNNModel,
     CNNSTRNet,
@@ -26,6 +28,15 @@ from .default_models import (
 from src.Constants.char_to_key import INDEX_TO_CHAR, NUM_CLASSES
 from src.pre_processing.augmentation import GIKAugmentationsPerFeature, AugmentedDataset
 from src.visualisation.visualisation import postprocess_coordinate_output
+from src.decoding.lm_fusion import (
+    build_char_ngram_lm,
+    build_interpolated_char_lm,
+    collect_logits_and_labels,
+    collect_logits_and_labels_tta,
+    tune_beta_on_validation,
+    beam_decode_with_lm,
+    sequence_accuracy,
+)
 
 class GIKModelWrapper(nn.Module):
     """
@@ -177,6 +188,17 @@ class GIKTrainer:
         batch_size: int = 32,
         train_ratio: float = 0.8,
         val_ratio: float = 0.1,
+        split_strategy: str = "stratified_random",
+        split_seed: int = 42,
+        use_weighted_sampler: bool = True,
+        synthetic_multiplier: int = 0,
+        precompute_synthetic: bool = False,
+        mixup_alpha: float = 0.0,
+        use_ema: bool = False,
+        ema_decay: float = 0.999,
+        sequence_lm_beta: float = 0.0,
+        sequence_aux_weight: float = 0.5,
+        reverse_time_aug_prob: float = 0.0,
         loss: callable = nn.CrossEntropyLoss,
         loss_kwargs: Optional[Dict] = None,
         regression: bool = False,
@@ -196,24 +218,124 @@ class GIKTrainer:
         self.device = torch.device(device)
         self.model = model.to(self.device)
         self.batch_size = batch_size
-        
-        # Contiguous splits (causality-preserving, no shuffle)
         n = len(dataset)
-        t = max(0, int(n * train_ratio))
-        v = max(t, t + int(n * val_ratio))
-        self.train_dataset = Subset(dataset, range(0, t))
-        self.val_dataset = Subset(dataset, range(t, v))
-        self.test_dataset = Subset(dataset, range(v, n))
+        labels = getattr(dataset, "_labels", None)
+        split_strategy = (split_strategy or "contiguous").lower()
+
+        if (
+            not regression
+            and split_strategy == "stratified_random"
+            and isinstance(labels, list)
+            and len(labels) == n
+        ):
+            rng = np.random.default_rng(split_seed)
+            by_class: Dict[str, List[int]] = defaultdict(list)
+            for i, lbl in enumerate(labels):
+                by_class[lbl].append(i)
+
+            train_idx: List[int] = []
+            val_idx: List[int] = []
+            test_idx: List[int] = []
+            for cls_idx in by_class.values():
+                cls_idx = np.array(cls_idx, dtype=np.int64)
+                rng.shuffle(cls_idx)
+                n_cls = len(cls_idx)
+                n_train_cls = int(n_cls * train_ratio)
+                n_val_cls = int(n_cls * val_ratio)
+                if n_cls >= 3:
+                    n_train_cls = max(1, min(n_train_cls, n_cls - 2))
+                    n_val_cls = max(1, min(n_val_cls, n_cls - n_train_cls - 1))
+                elif n_cls == 2:
+                    n_train_cls = 1
+                    n_val_cls = 0
+                else:
+                    n_train_cls = 1
+                    n_val_cls = 0
+
+                train_idx.extend(cls_idx[:n_train_cls].tolist())
+                val_idx.extend(cls_idx[n_train_cls : n_train_cls + n_val_cls].tolist())
+                test_idx.extend(cls_idx[n_train_cls + n_val_cls :].tolist())
+
+            rng.shuffle(train_idx)
+            rng.shuffle(val_idx)
+            rng.shuffle(test_idx)
+        else:
+            t = max(1, int(n * train_ratio))
+            v_len = max(1, int(n * val_ratio))
+            if t + v_len >= n:
+                v_len = max(1, n - t - 1)
+            v = min(n, t + v_len)
+            train_idx = list(range(0, t))
+            val_idx = list(range(t, v))
+            test_idx = list(range(v, n))
+            split_strategy = "contiguous"
+
+        self.train_dataset = Subset(dataset, train_idx)
+        self.val_dataset = Subset(dataset, val_idx)
+        self.test_dataset = Subset(dataset, test_idx)
+        self.split_strategy = split_strategy
 
         augment = GIKAugmentationsPerFeature()
-        # augmentation boolean as the flag, if false returns the same data, if true then applies augmentation on the fly
         self.regression = regression
-        self.train_dataset_aug = AugmentedDataset(self.train_dataset, augment=augment, use_augmentation=augmentation, synthetic_multiplier=5, precompute_synthetic=True, device=self.device, regression=regression)   # or False to disable
-        
-        self.train_loader = DataLoader(self.train_dataset_aug, batch_size=batch_size, shuffle=True, num_workers=0) # pass in the augmented dataset here for training only
+        # Keep augmentation/synthetic generation on CPU for GPU/MPS stability.
+        self.train_dataset_aug = AugmentedDataset(
+            self.train_dataset,
+            augment=augment,
+            use_augmentation=augmentation,
+            synthetic_multiplier=synthetic_multiplier,
+            precompute_synthetic=precompute_synthetic,
+            device=None,
+            regression=regression,
+            reverse_time_prob=reverse_time_aug_prob,
+        )
+
+        sampler = None
+        if use_weighted_sampler and not regression and isinstance(labels, list) and len(labels) == n:
+            char_to_idx = getattr(dataset, "_char_to_index", None)
+            if isinstance(char_to_idx, dict):
+                base_label_idx = [char_to_idx[labels[i]] for i in train_idx]
+                cls_counts = Counter(base_label_idx)
+                cls_weights = {c: (1.0 / cnt) for c, cnt in cls_counts.items()}
+                base_weights = [cls_weights[c] for c in base_label_idx]
+
+                syn_weights = []
+                for y in self.train_dataset_aug.synthetic_labels:
+                    if torch.is_tensor(y):
+                        c = int(torch.argmax(y).item()) if y.ndim > 0 else int(y.item())
+                    else:
+                        c = int(y)
+                    syn_weights.append(cls_weights.get(c, 1.0))
+
+                virtual_syn_mult = int(getattr(self.train_dataset_aug, "synthetic_multiplier", 0))
+                use_aug = bool(getattr(self.train_dataset_aug, "use_augmentation", False))
+                use_virtual_syn = (
+                    use_aug
+                    and virtual_syn_mult > 0
+                    and not bool(getattr(self.train_dataset_aug, "precompute_synthetic", False))
+                )
+                if use_virtual_syn:
+                    syn_weights.extend(base_weights * virtual_syn_mult)
+
+                weights = torch.tensor(base_weights + syn_weights, dtype=torch.double)
+                sampler = WeightedRandomSampler(weights=weights, num_samples=len(weights), replacement=True)
+
+        self.train_loader = DataLoader(self.train_dataset_aug,batch_size=batch_size,shuffle=(sampler is None),sampler=sampler,num_workers=0,)
         self.val_loader = DataLoader(self.val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
         self.test_loader = DataLoader(self.test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
-        
+
+        self.mixup_alpha = float(mixup_alpha)
+        self.use_ema = bool(use_ema)
+        self.ema_decay = float(ema_decay)
+        self.sequence_lm_beta = float(sequence_lm_beta)
+        self.sequence_aux_weight = float(sequence_aux_weight)
+        self.transition_log_probs: Optional[torch.Tensor] = None
+        self.ema_model: Optional[nn.Module] = None
+        if self.use_ema:
+            self.ema_model = copy.deepcopy(self.model).to(self.device)
+            self.ema_model.eval()
+            for p in self.ema_model.parameters():
+                p.requires_grad_(False)
+
         self.optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         
         if loss is not None:
@@ -223,7 +345,65 @@ class GIKTrainer:
         self.criterion = self.criterion.to(self.device)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
         self.history = {'train_loss': [], 'val_loss': [], 'train_acc': [], 'val_acc': []}
-    
+        self.transition_log_probs = self._build_transition_log_probs(dataset, train_idx)
+
+    def _build_transition_log_probs(self, dataset: Dataset, train_idx: List[int]) -> Optional[torch.Tensor]:
+        if self.regression:
+            return None
+        labels = getattr(dataset, "_labels", None)
+        prev_labels = getattr(dataset, "_prev_labels", None)
+        char_to_idx = getattr(dataset, "_char_to_index", None)
+        if not (isinstance(labels, list) and isinstance(prev_labels, list) and isinstance(char_to_idx, dict)):
+            return None
+        if len(labels) != len(prev_labels):
+            return None
+        C = self.model.num_classes
+        counts = torch.ones((C, C), dtype=torch.float32)
+        for i in train_idx:
+            if i < 0 or i >= len(labels):
+                continue
+            y, p = labels[i], prev_labels[i]
+            if y not in char_to_idx:
+                continue
+            y_idx = int(char_to_idx[y])
+            p_idx = int(char_to_idx[p]) if p in char_to_idx else 0
+            if 0 <= p_idx < C and 0 <= y_idx < C:
+                counts[p_idx, y_idx] += 1.0
+        probs = counts / counts.sum(dim=1, keepdim=True).clamp_min(1.0)
+        return torch.log(probs.to(self.device))
+
+    def _extract_prev_idx_from_input(self, batch_x: torch.Tensor) -> Optional[torch.Tensor]:
+        """Infer previous-character one-hot from appended input features."""
+        if batch_x.ndim != 3:
+            return None
+        C = self.model.num_classes
+        if batch_x.shape[-1] < C:
+            return None
+        prev_onehot = batch_x[:, 0, -C:]
+        row_sum = prev_onehot.sum(dim=-1)
+        in_range = ((prev_onehot >= -0.05) & (prev_onehot <= 1.05)).all(dim=-1)
+        near_one = (row_sum - 1.0).abs() < 0.2
+        strong_peak = prev_onehot.max(dim=-1).values > 0.8
+        valid_mask = in_range & near_one & strong_peak
+        if valid_mask.float().mean().item() < 0.8:
+            return None
+        return prev_onehot.argmax(dim=-1).long()
+
+    @torch.no_grad()
+    def _update_ema(self):
+        if not self.use_ema or self.ema_model is None:
+            return
+        d = self.ema_decay
+        for ema_p, p in zip(self.ema_model.parameters(), self.model.parameters()):
+            ema_p.data.mul_(d).add_(p.data, alpha=1.0 - d)
+        for ema_b, b in zip(self.ema_model.buffers(), self.model.buffers()):
+            ema_b.data.copy_(b.data)
+
+    def _eval_model(self) -> nn.Module:
+        if self.use_ema and self.ema_model is not None:
+            return self.ema_model
+        return self.model
+
     def train_epoch(self) -> Tuple[float, float]:
         """Train for one epoch."""
         self.model.train()
@@ -240,19 +420,40 @@ class GIKTrainer:
             batch_y = batch_y.to(self.device)
 
             self.optimizer.zero_grad()
-            logits = self.model(batch_x)
+            use_mixup = (not self.regression) and (self.mixup_alpha > 0.0)
+            if use_mixup:
+                lam = float(np.random.beta(self.mixup_alpha, self.mixup_alpha))
+                perm = torch.randperm(batch_x.size(0), device=self.device)
+                batch_x_mix = lam * batch_x + (1.0 - lam) * batch_x[perm]
+                target_a = batch_y.argmax(dim=-1)
+                target_b = batch_y[perm].argmax(dim=-1)
+                logits = self.model(batch_x_mix)
+            else:
+                logits = self.model(batch_x)
             if self.regression:
                 loss = self.criterion(logits, batch_y, raw_labels)
-                
             else:
-                loss = self.criterion(logits, batch_y.argmax(dim=-1))
+                targets = batch_y.argmax(dim=-1)
+                if use_mixup:
+                    loss = lam * self.criterion(logits, target_a) + (1.0 - lam) * self.criterion(logits, target_b)
+                else:
+                    loss = self.criterion(logits, targets)
+                    if self.sequence_lm_beta > 0.0 and self.transition_log_probs is not None:
+                        prev_idx = self._extract_prev_idx_from_input(batch_x)
+                        if prev_idx is not None:
+                            lm_logits = self.transition_log_probs[prev_idx]
+                            fused_logits = logits + self.sequence_lm_beta * lm_logits
+                            fused_loss = self.criterion(fused_logits, targets)
+                            w = self.sequence_aux_weight
+                            loss = (1.0 - w) * loss + w * fused_loss
                 pred = logits.argmax(dim=-1)
-                correct += (pred == batch_y.argmax(dim=-1)).sum().item()
+                correct += (pred == targets).sum().item()
             total += batch_x.size(0)
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self.optimizer.step()
+            self._update_ema()
 
             total_loss += loss.item() * batch_x.size(0)
 
@@ -293,7 +494,7 @@ class GIKTrainer:
         else:
             acc = correct / total if total else 0.0
         return total_loss / total if total else 0.0, acc
-    
+
     @torch.no_grad()
     def evaluate_test(self) -> Tuple[float, float]:
         """Evaluate on the held-out test set (causal split)."""
@@ -326,52 +527,115 @@ class GIKTrainer:
     def evaluate(self) -> Tuple[float, float]:
         """Alias for validate()."""
         return self.validate()
-    
+
+    @torch.no_grad()
+    def evaluate_with_lm_fusion(
+        self,
+        ngram_order: int = 2,
+        use_interpolated_lm: bool = True,
+        lm_order_weights: Optional[List[float]] = None,
+        add_k: float = 0.05,
+        beam_width: int = 20,
+        tta_passes: int = 1,
+        tta_noise_std: float = 0.0,
+        tta_scale_jitter: float = 0.0,
+        beta_values: Optional[List[float]] = None,
+    ) -> Dict[str, float]:
+        if self.regression:
+            return {"beta": 0.0, "val_acc": 0.0, "test_acc": 0.0}
+        if beta_values is None:
+            beta_values = [0.0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 1.0]
+        base_ds = self.train_dataset.dataset
+        labels = getattr(base_ds, "_labels", None)
+        if not isinstance(labels, list):
+            return {"beta": 0.0, "val_acc": 0.0, "test_acc": 0.0}
+        train_chars = [labels[i] for i in self.train_dataset.indices]
+        if use_interpolated_lm and ngram_order > 1:
+            lm = build_interpolated_char_lm(train_chars, max_order=ngram_order, add_k=add_k, order_weights=lm_order_weights)
+        else:
+            lm = build_char_ngram_lm(train_chars, order=ngram_order, add_k=add_k)
+        model = self._eval_model()
+        if tta_passes > 1:
+            val_logits, val_true = collect_logits_and_labels_tta(
+                self.val_dataset, model, str(self.device),
+                tta_passes=tta_passes, noise_std=tta_noise_std, scale_jitter=tta_scale_jitter,
+            )
+            test_logits, test_true = collect_logits_and_labels_tta(
+                self.test_dataset, model, str(self.device),
+                tta_passes=tta_passes, noise_std=tta_noise_std, scale_jitter=tta_scale_jitter,
+            )
+        else:
+            val_logits, val_true = collect_logits_and_labels(self.val_dataset, model, str(self.device))
+            test_logits, test_true = collect_logits_and_labels(self.test_dataset, model, str(self.device))
+        beta, _ = tune_beta_on_validation(val_logits, val_true, lm, beta_values, 1.0, beam_width)
+        val_pred = beam_decode_with_lm(val_logits, lm=lm, alpha_model=1.0, beta_lm=beta, beam_width=beam_width)
+        test_pred = beam_decode_with_lm(test_logits, lm=lm, alpha_model=1.0, beta_lm=beta, beam_width=beam_width)
+        return {
+            "beta": float(beta),
+            "val_acc": float(sequence_accuracy(val_pred, val_true)),
+            "test_acc": float(sequence_accuracy(test_pred, test_true)),
+        }
+
     def train(
-        self, 
+        self,
         epochs: int = 100,
         early_stopping_patience: int = 10,
+        early_stopping_metric: str = "val_loss",
         save_best: bool = True,
         save_path: str = 'best_model.pt'
     ) -> Dict[str, List[float]]:
         """Full training loop with early stopping."""
+        metric = (early_stopping_metric or "val_loss").lower()
+        use_acc_metric = (metric in {"val_acc", "acc", "accuracy"}) and (not self.regression)
+        best_metric = -float('inf') if use_acc_metric else float('inf')
         best_val_loss = float('inf')
         patience_counter = 0
-        
+
         print(f"Training on {self.device}")
-        print(f"Train: {len(self.train_dataset_aug)}, Val: {len(self.val_dataset)}, Test: {len(self.test_dataset)} (causal split, no shuffle)")
+        print(f"Train: {len(self.train_dataset_aug)}, Val: {len(self.val_dataset)}, Test: {len(self.test_dataset)} (split: {self.split_strategy})")
+        if use_acc_metric:
+            print("Early stopping metric: val_acc (maximize)")
+        else:
+            print("Early stopping metric: val_loss (minimize)")
         print("-" * 60)
-        
+
         for epoch in range(epochs):
             train_loss, train_acc = self.train_epoch()
             val_loss, val_acc = self.validate()
-            
+
             self.scheduler.step(val_loss)
-            
+
             self.history['train_loss'].append(train_loss)
             self.history['val_loss'].append(val_loss)
             if not self.regression:
                 self.history['train_acc'].append(train_acc)
                 self.history['val_acc'].append(val_acc)
-            
+
             print(f"Epoch {epoch+1:3d}/{epochs} ")
             print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} ")
-            
+
             if not self.regression:
                 print(f"Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f} ")
-            
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+
+            current_metric = val_acc if use_acc_metric else val_loss
+            is_better = (current_metric > best_metric) if use_acc_metric else (current_metric < best_metric)
+            if is_better:
+                best_metric = current_metric
+                best_val_loss = min(best_val_loss, val_loss)
                 patience_counter = 0
                 if save_best:
-                    torch.save(self.model.state_dict(), save_path)
-                    print(f"  -> Saved best model (val_loss: {val_loss:.4f})")
+                    state_dict = self.ema_model.state_dict() if (self.use_ema and self.ema_model is not None) else self.model.state_dict()
+                    torch.save(state_dict, save_path)
+                    if use_acc_metric:
+                        print(f"  -> Saved best model (val_acc: {val_acc:.4f}, val_loss: {val_loss:.4f})")
+                    else:
+                        print(f"  -> Saved best model (val_loss: {val_loss:.4f})")
             else:
                 patience_counter += 1
                 if patience_counter >= early_stopping_patience:
                     print(f"\nEarly stopping at epoch {epoch+1}")
                     break
-        
+
         print("-" * 60)
         print(f"Training complete. Best val loss: {best_val_loss:.4f}")
         

@@ -59,7 +59,7 @@ def _filtered_combined_col_names(base_cols: List[str]) -> List[str]:
             cols_with_pos.extend([f"x_{part}", f"y_{part}", f"z_{part}"])
     return cols_with_pos
 
-def filter_imu_data(df: pd.DataFrame) -> pd.DataFrame:
+def filter_imu_data(df: pd.DataFrame, side:str) -> pd.DataFrame:
     """Apply IMU filtering to each imu sensor data column (base, thumb, index, middle, ring, pinky) 
     and add the processed data to the dataframe. This is applied before the right and left hands are combined. """
     df = df.copy()
@@ -81,12 +81,12 @@ def filter_imu_data(df: pd.DataFrame) -> pd.DataFrame:
             _, a, *_ = tracker.track_attitude(data, init_tuple, R0_ref=R0_ref)
         a_p = tracker.remove_acc_drift(a, threshold=0.2, filter=True, cof=(0.1, 5))
         vel = tracker.zupt(a_p, threshold=0.2)
-        pos = tracker.track_position(a_p, vel)
+        pos = tracker.track_position(a_p, vel, part + "_" + side)
         
         # Update with filtered values, replacing NaN/Inf with 0
-        # df[f'ax_{part}'] = np.nan_to_num(a[:, 0], nan=0.0, posinf=0.0, neginf=0.0)
-        # df[f'ay_{part}'] = np.nan_to_num(a[:, 1], nan=0.0, posinf=0.0, neginf=0.0)
-        # df[f'az_{part}'] = np.nan_to_num(a[:, 2], nan=0.0, posinf=0.0, neginf=0.0)
+        df[f'ax_{part}'] = np.nan_to_num(vel[:, 0], nan=0.0, posinf=0.0, neginf=0.0)
+        df[f'ay_{part}'] = np.nan_to_num(vel[:, 1], nan=0.0, posinf=0.0, neginf=0.0)
+        df[f'az_{part}'] = np.nan_to_num(vel[:, 2], nan=0.0, posinf=0.0, neginf=0.0)
         df[f'x_{part}'] = np.nan_to_num(pos[:, 0], nan=0.0, posinf=0.0, neginf=0.0)
         df[f'y_{part}'] = np.nan_to_num(pos[:, 1], nan=0.0, posinf=0.0, neginf=0.0)
         df[f'z_{part}'] = np.nan_to_num(pos[:, 2], nan=0.0, posinf=0.0, neginf=0.0)
@@ -102,7 +102,9 @@ def preprocess_multiple_sources(
     max_seq_length: int = 10,
     normalize: bool = True,
     per_sample_normalizaion: bool = False,
-    apply_filtering: bool = True
+    apply_filtering: bool = True,
+    alignment_prev_windows: int = 0,
+    alignment_future_windows: int = 0,
 ) -> Dict[str, Any]:
     """
     Preprocess data from multiple source files and combine them.
@@ -157,7 +159,9 @@ def preprocess_multiple_sources(
         
         samples, labels, prev_labels, metadata = preprocessor.align(
             max_seq_length=max_seq_length,
-            filter_func=filter_imu_data if apply_filtering else None
+            filter_func=filter_imu_data if apply_filtering else None,
+            context_prev_windows=alignment_prev_windows,
+            context_future_windows=alignment_future_windows,
         )
 
         all_samples.extend(samples)
@@ -300,6 +304,8 @@ def preprocess_multiple_sources(
         'left_files': left_files if has_left else [],
         'right_files': right_files if has_right else [],
         'filter_applied': apply_filtering,
+        'alignment_prev_windows': int(alignment_prev_windows),
+        'alignment_future_windows': int(alignment_future_windows),
     }
 
     save_dict = {
@@ -454,18 +460,53 @@ def export_dataset_to_csv(
         print(f"  {char}: {count}")
     return summary_path
 
-def get_class_weights(pt_path: str) -> torch.Tensor:
-    """Calculates Class Weights for the Processed Dataset
+def get_class_weights(
+    pt_path: str,
+    train_ratio: float = 1.0,
+    split_strategy: str = "contiguous",
+    split_seed: int = 42,
+) -> torch.Tensor:
+    """Calculates Class Weights for the Processed Dataset (train split only to prevent leakage)
 
     Args:
         pt_path (str): Path to the .pt file
+        train_ratio: Fraction of data for training
+        split_strategy: "contiguous" or "stratified_random"
+        split_seed: Random seed for stratified split
 
     Returns:
-        Dict: Dictionary mapping each character to its weight
+        Tensor: Class weights
     """
     data = torch.load(pt_path, weights_only=False)
     labels = data["labels"]  # list[str]
 
+    if train_ratio >= 1.0:
+        return get_class_weights_from_labels(labels)
+
+    n = len(labels)
+    n_train = max(1, int(n * train_ratio))
+    split_strategy = (split_strategy or "contiguous").lower()
+
+    if split_strategy == "stratified_random":
+        rng = np.random.default_rng(split_seed)
+        by_class: Dict[str, List[int]] = {}
+        for i, lbl in enumerate(labels):
+            by_class.setdefault(lbl, []).append(i)
+        train_idx: List[int] = []
+        for cls_idx in by_class.values():
+            cls_idx = np.array(cls_idx, dtype=np.int64)
+            rng.shuffle(cls_idx)
+            k = int(len(cls_idx) * train_ratio)
+            k = max(1, min(k, len(cls_idx)))
+            train_idx.extend(cls_idx[:k].tolist())
+        labels_train = [labels[i] for i in train_idx]
+    else:
+        labels_train = labels[:n_train]
+
+    return get_class_weights_from_labels(labels_train)
+
+
+def get_class_weights_from_labels(labels: List[str]) -> torch.Tensor:
     counts = Counter(labels)
     N = sum(counts.values())
     K = len(CHAR_TO_INDEX)
@@ -473,7 +514,7 @@ def get_class_weights(pt_path: str) -> torch.Tensor:
     w = torch.ones(K, dtype=torch.float32)
     for ch, idx in CHAR_TO_INDEX.items():
         n_c = counts.get(ch, 0)
-        w[idx] = (N / (K * n_c)) if n_c > 0 else 1.0  # or keep 1.0 / drop class
+        w[idx] = (N / (K * n_c)) if n_c > 0 else 1.0
     return w
 
 class PreprocessedGIKDataset(Dataset):
