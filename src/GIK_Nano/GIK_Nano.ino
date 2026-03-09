@@ -3,8 +3,8 @@
 // The sensor values are sent to the receiver via Bluetooth service with the MTU size of 153 bytes
 //--------------------------------------------------------------------------------------------------------------------
 
-//#define LEFT_HAND  // Define this as left hand 
-#define RIGHT_HAND  // Define this as right hand
+#define LEFT_HAND  // Define this as left hand 
+//#define RIGHT_HAND  // Define this as right hand
 #include "GIK_Hand_Config.h"  // Include the hand configuration file
 #include <ArduinoBLE.h>
 #include "Arduino_BMI270_BMM150.h"
@@ -67,14 +67,191 @@ float ax_p, ay_p, az_p, gx_p, gy_p, gz_p;
 int ax_pinky = 0, ay_pinky = 0, az_pinky = 0; // accelerometer xyz from left pinky
 int gx_pinky = 0, gy_pinky = 0, gz_pinky = 0; // gyro xyz from left pinky
 
+// Base IMU biases
+float ax_base_bias = 0, ay_base_bias = 0, az_base_bias = 0;
+float gx_base_bias = 0, gy_base_bias = 0, gz_base_bias = 0;
+
+// Finger IMU biases (float, even though raw is int)
+float ax_tb_bias = 0, ay_tb_bias = 0, az_tb_bias = 0;
+float gx_tb_bias = 0, gy_tb_bias = 0, gz_tb_bias = 0;
+
+float ax_id_bias = 0, ay_id_bias = 0, az_id_bias = 0;
+float gx_id_bias = 0, gy_id_bias = 0, gz_id_bias = 0;
+
+float ax_m_bias  = 0, ay_m_bias  = 0, az_m_bias  = 0;
+float gx_m_bias  = 0, gy_m_bias  = 0, gz_m_bias  = 0;
+
+float ax_r_bias  = 0, ay_r_bias  = 0, az_r_bias  = 0;
+float gx_r_bias  = 0, gy_r_bias  = 0, gz_r_bias  = 0;
+
+float ax_p_bias  = 0, ay_p_bias  = 0, az_p_bias  = 0;
+float gx_p_bias  = 0, gy_p_bias  = 0, gz_p_bias  = 0;
+
+
+void calibrateIMUs(unsigned long calib_ms = 3000) {
+  Serial.println("Starting IMU calibration... keep hand still.");
+
+  unsigned long start = millis();
+  unsigned long count = 0;
+
+  // Sums for base IMU
+  double axb_sum = 0, ayb_sum = 0, azb_sum = 0;
+  double gxb_sum = 0, gyb_sum = 0, gzb_sum = 0;
+
+  // Sums for fingers (use float outputs from convertRaw*)
+  double axtb_sum = 0, aytb_sum = 0, aztb_sum = 0;
+  double gxtb_sum = 0, gytb_sum = 0, gztb_sum = 0;
+
+  double axid_sum = 0, ayid_sum = 0, azid_sum = 0;
+  double gxid_sum = 0, gyid_sum = 0, gzid_sum = 0;
+
+  double axm_sum  = 0, aym_sum  = 0, azm_sum  = 0;
+  double gxm_sum  = 0, gym_sum  = 0, gzm_sum  = 0;
+
+  double axr_sum  = 0, ayr_sum  = 0, azr_sum  = 0;
+  double gxr_sum  = 0, gyr_sum  = 0, gzr_sum  = 0;
+
+  double axp_sum  = 0, ayp_sum  = 0, azp_sum  = 0;
+  double gxp_sum  = 0, gyp_sum  = 0, gzp_sum  = 0;
+
+  int ax_ti, ay_ti, az_ti, gx_ti, gy_ti, gz_ti; // temp raw ints
+
+  while (millis() - start < calib_ms) {
+    // base IMU
+    if (IMU.accelerationAvailable()) {
+      float axb, ayb, azb;
+      IMU.readAcceleration(axb, ayb, azb);
+      axb_sum += axb;
+      ayb_sum += ayb;
+      azb_sum += azb;
+    }
+    if (IMU.gyroscopeAvailable()) {
+      float gxb, gyb, gzb;
+      IMU.readGyroscope(gxb, gyb, gzb);
+      gxb_sum += gxb;
+      gyb_sum += gyb;
+      gzb_sum += gzb;
+    }
+
+    // thumb
+    digitalWrite(CS_THUMB, LOW);
+    BMI160.readMotionSensor(ax_ti, ay_ti, az_ti, gx_ti, gy_ti, gz_ti);
+    digitalWrite(CS_THUMB, HIGH);
+    axtb_sum += convertRawAccel(ax_ti);
+    aytb_sum += convertRawAccel(ay_ti);
+    aztb_sum += convertRawAccel(az_ti);
+    gxtb_sum += convertRawGyro(gx_ti);
+    gytb_sum += convertRawGyro(gy_ti);
+    gztb_sum += convertRawGyro(gz_ti);
+
+    // index
+    digitalWrite(CS_INDEX, LOW);
+    BMI160.readMotionSensor(ax_ti, ay_ti, az_ti, gx_ti, gy_ti, gz_ti);
+    digitalWrite(CS_INDEX, HIGH);
+    axid_sum += convertRawAccel(ax_ti);
+    ayid_sum += convertRawAccel(ay_ti);
+    azid_sum += convertRawAccel(az_ti);
+    gxid_sum += convertRawGyro(gx_ti);
+    gyid_sum += convertRawGyro(gy_ti);
+    gzid_sum += convertRawGyro(gz_ti);
+
+    // middle
+    digitalWrite(CS_MIDDLE, LOW);
+    BMI160.readMotionSensor(ax_ti, ay_ti, az_ti, gx_ti, gy_ti, gz_ti);
+    digitalWrite(CS_MIDDLE, HIGH);
+    axm_sum += convertRawAccel(ax_ti);
+    aym_sum += convertRawAccel(ay_ti);
+    azm_sum += convertRawAccel(az_ti);
+    gxm_sum += convertRawGyro(gx_ti);
+    gym_sum += convertRawGyro(gy_ti);
+    gzm_sum += convertRawGyro(gz_ti);
+
+    // ring
+    digitalWrite(CS_RING, LOW);
+    BMI160.readMotionSensor(ax_ti, ay_ti, az_ti, gx_ti, gy_ti, gz_ti);
+    digitalWrite(CS_RING, HIGH);
+    axr_sum += convertRawAccel(ax_ti);
+    ayr_sum += convertRawAccel(ay_ti);
+    azr_sum += convertRawAccel(az_ti);
+    gxr_sum += convertRawGyro(gx_ti);
+    gyr_sum += convertRawGyro(gy_ti);
+    gzr_sum += convertRawGyro(gz_ti);
+
+    // pinky
+    digitalWrite(CS_PINKY, LOW);
+    BMI160.readMotionSensor(ax_ti, ay_ti, az_ti, gx_ti, gy_ti, gz_ti);
+    digitalWrite(CS_PINKY, HIGH);
+    axp_sum += convertRawAccel(ax_ti);
+    ayp_sum += convertRawAccel(ay_ti);
+    azp_sum += convertRawAccel(az_ti);
+    gxp_sum += convertRawGyro(gx_ti);
+    gyp_sum += convertRawGyro(gy_ti);
+    gzp_sum += convertRawGyro(gz_ti);
+
+    count++;
+    delay(5); // small delay to avoid spamming
+  }
+
+  if (count == 0) return;
+
+  // Base IMU biases
+  ax_base_bias = axb_sum / count;
+  ay_base_bias = ayb_sum / count;
+  az_base_bias = azb_sum / count;  // includes gravity if z-axis aligned
+  gx_base_bias = gxb_sum / count;
+  gy_base_bias = gyb_sum / count;
+  gz_base_bias = gzb_sum / count;
+
+  // Thumb
+  ax_tb_bias = axtb_sum / count;
+  ay_tb_bias = aytb_sum / count;
+  az_tb_bias = aztb_sum / count;
+  gx_tb_bias = gxtb_sum / count;
+  gy_tb_bias = gytb_sum / count;
+  gz_tb_bias = gztb_sum / count;
+
+  // Index
+  ax_id_bias = axid_sum / count;
+  ay_id_bias = ayid_sum / count;
+  az_id_bias = azid_sum / count;
+  gx_id_bias = gxid_sum / count;
+  gy_id_bias = gyid_sum / count;
+  gz_id_bias = gzid_sum / count;
+
+  // Middle
+  ax_m_bias = axm_sum / count;
+  ay_m_bias = aym_sum / count;
+  az_m_bias = azm_sum / count;
+  gx_m_bias = gxm_sum / count;
+  gy_m_bias = gym_sum / count;
+  gz_m_bias = gzm_sum / count;
+
+  // Ring
+  ax_r_bias = axr_sum / count;
+  ay_r_bias = ayr_sum / count;
+  az_r_bias = azr_sum / count;
+  gx_r_bias = gxr_sum / count;
+  gy_r_bias = gyr_sum / count;
+  gz_r_bias = gzr_sum / count;
+
+  // Pinky
+  ax_p_bias = axp_sum / count;
+  ay_p_bias = ayp_sum / count;
+  az_p_bias = azp_sum / count;
+  gx_p_bias = gxp_sum / count;
+  gy_p_bias = gyp_sum / count;
+  gz_p_bias = gzp_sum / count;
+
+}
+
+
+
 // Packet layout (little-endian):
 // uint32  sample_id
 // float   ax_base, ay_base, az_base, gx_base, gy_base, gz_base
 // for each finger: thumb, index, middle, ring, pinky
 //   float ax, ay, az, gx, gy, gz
 //   uint8 f which should add up to 153 bytes of MTU
-
-
 uint32_t sample_id = 0; // to label the packets
 
 void setup() {
@@ -161,9 +338,6 @@ void loop() {
   if (central) {
     Serial.print("Connected to Receiver: ");
     Serial.println(central.address());
-    digitalWrite(LEDR, HIGH);
-    digitalWrite(LEDB, HIGH);
-    digitalWrite(LEDG, LOW);
 
     // Reset sample counter on each new connection
     sample_id = 0;
@@ -171,7 +345,27 @@ void loop() {
     while (!GIK_tx_Char.subscribed() && central.connected()) {
       delay(100); // Wait until receiver.py subscribes then only move to data sending to prevent sample index loss
     }
-    
+
+    digitalWrite(LEDR, HIGH);  // blue light
+    digitalWrite(LEDB, LOW);
+    digitalWrite(LEDG, HIGH);
+
+    delay(3000);
+
+    calibrateIMUs(3000);
+
+
+    for (int i = 0; i < 10; ++i) {
+      digitalWrite(LEDR, HIGH);  // alert the user to ready
+      digitalWrite(LEDB, HIGH);
+      digitalWrite(LEDG, HIGH);
+      delay(200); 
+      digitalWrite(LEDR, HIGH); 
+      digitalWrite(LEDB, LOW);
+      digitalWrite(LEDG, HIGH);
+      delay(200);
+    }
+
     delay(500);
 
     int last_thumb = analogRead(FSR1_PIN);
@@ -180,7 +374,12 @@ void loop() {
     int last_ring = analogRead(FSR4_PIN);
     int last_pinky = analogRead(FSR5_PIN);
     while (central.connected()) {
+
+      digitalWrite(LEDR, HIGH);
+      digitalWrite(LEDB, HIGH);
+      digitalWrite(LEDG, LOW);
   
+
       unsigned long startTime = micros();
 
 
@@ -241,40 +440,49 @@ void loop() {
       BMI160.readMotionSensor(ax_pinky, ay_pinky, az_pinky, gx_pinky, gy_pinky, gz_pinky);
       digitalWrite(CS_PINKY, HIGH);
 
-      ax_tb = convertRawAccel(ax_thumb);
-      ay_tb = convertRawAccel(ay_thumb);
-      az_tb = convertRawAccel(az_thumb);
-      gx_tb = convertRawGyro(gx_thumb);
-      gy_tb = convertRawGyro(gy_thumb);
-      gz_tb = convertRawGyro(gz_thumb);
 
-      ax_id = convertRawAccel(ax_index);
-      ay_id = convertRawAccel(ay_index);
-      az_id = convertRawAccel(az_index);
-      gx_id = convertRawGyro(gx_index);
-      gy_id = convertRawGyro(gy_index);
-      gz_id = convertRawGyro(gz_index);
+      ax_base = ax_base - ax_base_bias;
+      ay_base = ay_base - ay_base_bias;
+      az_base = az_base - az_base_bias;
+      gx_base = gx_base - gx_base_bias;
+      gy_base = gy_base - gy_base_bias;
+      gz_base = gz_base - gz_base_bias;
 
-      ax_m = convertRawAccel(ax_middle);
-      ay_m = convertRawAccel(ay_middle);
-      az_m = convertRawAccel(az_middle);
-      gx_m = convertRawGyro(gx_middle);
-      gy_m = convertRawGyro(gy_middle);
-      gz_m = convertRawGyro(gz_middle);
 
-      ax_r = convertRawAccel(ax_ring);
-      ay_r = convertRawAccel(ay_ring);
-      az_r = convertRawAccel(az_ring);
-      gx_r = convertRawGyro(gx_ring);
-      gy_r = convertRawGyro(gy_ring);
-      gz_r = convertRawGyro(gz_ring);
+      ax_tb = convertRawAccel(ax_thumb) - ax_tb_bias;
+      ay_tb = convertRawAccel(ay_thumb) - ay_tb_bias;
+      az_tb = convertRawAccel(az_thumb) - az_tb_bias;
+      gx_tb = convertRawGyro(gx_thumb) - gx_tb_bias;
+      gy_tb = convertRawGyro(gy_thumb) - gy_tb_bias;
+      gz_tb = convertRawGyro(gz_thumb) - gz_tb_bias;
 
-      ax_p = convertRawAccel(ax_pinky);
-      ay_p = convertRawAccel(ay_pinky);
-      az_p = convertRawAccel(az_pinky);
-      gx_p = convertRawGyro(gx_pinky);
-      gy_p = convertRawGyro(gy_pinky);
-      gz_p = convertRawGyro(gz_pinky);
+      ax_id = convertRawAccel(ax_index) - ax_id_bias;
+      ay_id = convertRawAccel(ay_index) - ay_id_bias;
+      az_id = convertRawAccel(az_index) - az_id_bias;
+      gx_id = convertRawGyro(gx_index) - gx_id_bias;
+      gy_id = convertRawGyro(gy_index) - gy_id_bias;
+      gz_id = convertRawGyro(gz_index) - gz_id_bias;
+
+      ax_m = convertRawAccel(ax_middle) - ax_m_bias;
+      ay_m = convertRawAccel(ay_middle) - ay_m_bias;
+      az_m = convertRawAccel(az_middle) - az_m_bias;
+      gx_m = convertRawGyro(gx_middle) - gx_m_bias;
+      gy_m = convertRawGyro(gy_middle) - gy_m_bias;
+      gz_m = convertRawGyro(gz_middle) - gz_m_bias;
+
+      ax_r = convertRawAccel(ax_ring) - ax_r_bias;
+      ay_r = convertRawAccel(ay_ring) - ay_r_bias;
+      az_r = convertRawAccel(az_ring) - az_r_bias;
+      gx_r = convertRawGyro(gx_ring) - gx_r_bias;
+      gy_r = convertRawGyro(gy_ring) - gy_r_bias;
+      gz_r = convertRawGyro(gz_ring) - gz_r_bias;
+
+      ax_p = convertRawAccel(ax_pinky) - ax_p_bias;
+      ay_p = convertRawAccel(ay_pinky) - ay_p_bias;
+      az_p = convertRawAccel(az_pinky) - az_p_bias;
+      gx_p = convertRawGyro(gx_pinky) - gx_p_bias;
+      gy_p = convertRawGyro(gy_pinky) - gy_p_bias;
+      gz_p = convertRawGyro(gz_pinky) - gz_p_bias;
 
       sample_id++;
 

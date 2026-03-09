@@ -139,12 +139,12 @@ class Preprocessing:
         if self.has_right:
             self.right.df = self.right.sorted_df
             if filter_func is not None:
-                self.right.df = filter_func(self.right.df)
+                self.right.df = filter_func(self.right.df,'R')
             right_cols = self.right.feature_columns
         if self.has_left:
             self.left.df = self.left.sorted_df
             if filter_func is not None:
-                self.left.df = filter_func(self.left.df)
+                self.left.df = filter_func(self.left.df,'L')
             left_cols = self.left.feature_columns
 
         if len(left_cols) == 0 and len(right_cols) > 0:
