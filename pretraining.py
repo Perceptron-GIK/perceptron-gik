@@ -87,9 +87,9 @@ def filter_imu_data(df: pd.DataFrame) -> pd.DataFrame:
         df[f'ax_{part}'] = np.nan_to_num(a[:, 0], nan=0.0, posinf=0.0, neginf=0.0)
         df[f'ay_{part}'] = np.nan_to_num(a[:, 1], nan=0.0, posinf=0.0, neginf=0.0)
         df[f'az_{part}'] = np.nan_to_num(a[:, 2], nan=0.0, posinf=0.0, neginf=0.0)
-        df[f'x_{part}'] = np.nan_to_num(pos[:, 0], nan=0.0, posinf=0.0, neginf=0.0)
-        df[f'y_{part}'] = np.nan_to_num(pos[:, 1], nan=0.0, posinf=0.0, neginf=0.0)
-        df[f'z_{part}'] = np.nan_to_num(pos[:, 2], nan=0.0, posinf=0.0, neginf=0.0)
+        df[f'x_{part}'] = np.nan_to_num(vel[:, 0], nan=0.0, posinf=0.0, neginf=0.0)
+        df[f'y_{part}'] = np.nan_to_num(vel[:, 1], nan=0.0, posinf=0.0, neginf=0.0)
+        df[f'z_{part}'] = np.nan_to_num(vel[:, 2], nan=0.0, posinf=0.0, neginf=0.0)
     
     return df
 
