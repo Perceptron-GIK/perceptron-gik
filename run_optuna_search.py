@@ -46,6 +46,7 @@ def build_config(config_data: dict) -> dict:
     mode = experiment["mode"]
     mode_cfg = config_data["modes"][mode]
     dim_reduction_cfg = copy.deepcopy(experiment["dim_reduction"])
+    alignment_ctx = experiment.get("alignment_context", {})
 
     config = {
         "mode": mode,
@@ -61,6 +62,9 @@ def build_config(config_data: dict) -> dict:
         "run_preprocess": experiment["run_preprocess"],
         "export_dataset_csv": experiment["export_dataset_csv"],
         "use_augmentation": experiment["use_augmentation"],
+        "alignment_prev_windows": alignment_ctx.get("prev_windows", 0),
+        "alignment_future_windows": alignment_ctx.get("future_windows", 0),
+        "append_prev_char_feature": experiment.get("append_prev_char_feature", False),
         **config_data["model"],
         **config_data["train"],
         **mode_cfg,
@@ -101,8 +105,10 @@ def prepare_dataset(config: dict, data_cfg: dict) -> Path:
             output_path=str(processed_path),
             max_seq_length=config["max_seq_length"],
             normalize=config["normalize"],
-            per_sample_normalizaion = config["normalize_per_seq"]
+            per_sample_normalizaion=config["normalize_per_seq"],
             apply_filtering=config["apply_filtering"],
+            alignment_prev_windows=config.get("alignment_prev_windows", 0),
+            alignment_future_windows=config.get("alignment_future_windows", 0),
         )
         if config.get("export_dataset_csv", False):
             export_dataset_to_csv(str(processed_path), output_dir=str(data_dir))
@@ -189,6 +195,14 @@ def suggest_trial_params(trial: optuna.Trial, base_config: dict) -> dict:
         "hidden_dim_classification_head", [64, 128, 256, 512, 1024, 2048, 4096]
     )
     cfg["num_layers"] = trial.suggest_int("num_layers", 1, 5)
+
+    # New training hyperparameters from yaml
+    cfg["mixup_alpha"] = trial.suggest_float("mixup_alpha", 0.0, 0.4, step=0.05)
+    cfg["use_ema"] = trial.suggest_categorical("use_ema", [True, False])
+    cfg["ema_decay"] = trial.suggest_float("ema_decay", 0.990, 0.999, step=0.001)
+    cfg["sequence_lm_beta"] = trial.suggest_float("sequence_lm_beta", 0.0, 0.5, step=0.05)
+    cfg["sequence_aux_weight"] = trial.suggest_float("sequence_aux_weight", 0.1, 1.0, step=0.1)
+    cfg["reverse_time_aug_prob"] = trial.suggest_float("reverse_time_aug_prob", 0.0, 0.3, step=0.05)
 
     model_type = cfg["model_type"]
     # Build model-specific kwargs from scratch so incompatible keys from a previous
@@ -284,6 +298,17 @@ def objective(
         learning_rate=cfg["learning_rate"],
         weight_decay=cfg["weight_decay"],
         device=device,
+        split_strategy=cfg.get("split_strategy", "contiguous"),
+        split_seed=cfg.get("split_seed", 42),
+        use_weighted_sampler=cfg.get("use_weighted_sampler", False),
+        synthetic_multiplier=cfg.get("synthetic_multiplier", 0),
+        precompute_synthetic=cfg.get("precompute_synthetic", False),
+        mixup_alpha=cfg.get("mixup_alpha", 0.0),
+        use_ema=cfg.get("use_ema", False),
+        ema_decay=cfg.get("ema_decay", 0.999),
+        sequence_lm_beta=cfg.get("sequence_lm_beta", 0.0),
+        sequence_aux_weight=cfg.get("sequence_aux_weight", 0.5),
+        reverse_time_aug_prob=cfg.get("reverse_time_aug_prob", 0.0),
         loss=cfg["loss"],
         loss_kwargs=cfg.get("loss_params"),
         regression=cfg["regression"],
@@ -292,6 +317,7 @@ def objective(
     history = trainer.train(
         epochs=min(max_epochs, cfg["epochs"]),
         early_stopping_patience=cfg["early_stopping"],
+        early_stopping_metric=cfg.get("early_stopping_metric", "val_loss"),
         save_best=False,
     )
 
