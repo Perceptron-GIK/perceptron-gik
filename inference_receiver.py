@@ -242,8 +242,6 @@ def run_inference(
     prev_char: index of previous char (for preprocess input feature)
     history_chars: list of last (lm_order-1) chars for LM context
     """
-    global inference_predictions
-
     processed_data = preprocess(
         left_data=left,
         right_data=right,
@@ -340,7 +338,7 @@ async def process_queues(left_queue, right_queue):
                 events[:] = events[drop_n:]
                 event_offset = keep_from_abs_idx
                 max_abs_idx = event_offset + len(events) - 1
-
+    i =0
     while True:
         left_task = asyncio.create_task(left_queue.get())
         right_task = asyncio.create_task(right_queue.get())
@@ -366,7 +364,9 @@ async def process_queues(left_queue, right_queue):
         idx = left_win.fsr_detected(fsr_indices=FSR_INDICES) if triggered_hand == "left" else right_win.fsr_detected(fsr_indices=FSR_INDICES)
         if idx is None:
             continue
-
+        else:
+            print(f"FSR DETECTED {i}")
+            i += 1
         chunk = np.stack(left_win.pop_chunk(idx+1)) if triggered_hand == "left" else np.stack(right_win.pop_chunk(idx+1))
         if chunk.shape[0] <= 2:
             continue
@@ -394,7 +394,7 @@ def evaluate_inference(ground_truth, predictions):
         pred_coords = FULL_COORDS[predictions[i]]
         error += (gt_coords[0] - pred_coords[0])**2 + (gt_coords[1] - pred_coords[1])**2
     acc = round((correct/seq_length)**100, 2)
-    return round(error, 2), acc
+    return error, acc
 
 ## ================================================== ##
 
@@ -410,6 +410,6 @@ async def main():
                                 process_queues(data_queue_left, data_queue_right))
     finally:
             error, acc = evaluate_inference(GROUND_TRUTH, inference_predictions)
-            print(f"\nInference Error: {error}, Inference Accuracy: {acc}%")
+            print(f"Inference Error: {error}, Inference Accuracy: {acc}%")
     
 asyncio.run(main())
