@@ -385,18 +385,6 @@ class GIKTrainer:
                 weights = torch.tensor(base_weights + syn_weights, dtype=torch.double)
                 sampler = WeightedRandomSampler(weights=weights, num_samples=len(weights), replacement=True)
 
-        train_ds_for_loader = self.train_dataset_aug
-        val_ds_for_loader = self.val_dataset
-        test_ds_for_loader = self.test_dataset
-        if self.use_prev_from_labels and self.char_lm is not None and not self.regression:
-            train_ds_for_loader = DatasetWithPrevIdx(self.train_dataset_aug)
-            val_ds_for_loader = DatasetWithPrevIdx(self.val_dataset)
-            test_ds_for_loader = DatasetWithPrevIdx(self.test_dataset)
-
-        self.train_loader = DataLoader(train_ds_for_loader, batch_size=batch_size, shuffle=(sampler is None), sampler=sampler, num_workers=0)
-        self.val_loader = DataLoader(val_ds_for_loader, batch_size=batch_size, shuffle=False, num_workers=0)
-        self.test_loader = DataLoader(test_ds_for_loader, batch_size=batch_size, shuffle=False, num_workers=0)
-
         self.mixup_alpha = float(mixup_alpha)
         self.use_ema = bool(use_ema)
         self.ema_decay = float(ema_decay)
@@ -410,6 +398,21 @@ class GIKTrainer:
         self.transition_log_probs: Optional[torch.Tensor] = None  # legacy bigram; kept for fallback
         self.char_lm: Optional[Dict[str, Any]] = None
         self.idx_to_char: Dict[int, str] = {int(i): ch for i, ch in INDEX_TO_CHAR.items()}
+        self.transition_log_probs = self._build_transition_log_probs(dataset, train_idx)
+        if self.sequence_lm_beta > 0.0 and not self.regression:
+            self.char_lm = self._build_char_lm(dataset, train_idx)
+
+        train_ds_for_loader = self.train_dataset_aug
+        val_ds_for_loader = self.val_dataset
+        test_ds_for_loader = self.test_dataset
+        if self.use_prev_from_labels and self.char_lm is not None and not self.regression:
+            train_ds_for_loader = DatasetWithPrevIdx(self.train_dataset_aug)
+            val_ds_for_loader = DatasetWithPrevIdx(self.val_dataset)
+            test_ds_for_loader = DatasetWithPrevIdx(self.test_dataset)
+
+        self.train_loader = DataLoader(train_ds_for_loader, batch_size=batch_size, shuffle=(sampler is None), sampler=sampler, num_workers=0)
+        self.val_loader = DataLoader(val_ds_for_loader, batch_size=batch_size, shuffle=False, num_workers=0)
+        self.test_loader = DataLoader(test_ds_for_loader, batch_size=batch_size, shuffle=False, num_workers=0)
         self.ema_model: Optional[nn.Module] = None
         if self.use_ema:
             self.ema_model = copy.deepcopy(self.model).to(self.device)
@@ -426,9 +429,6 @@ class GIKTrainer:
         self.criterion = self.criterion.to(self.device)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
         self.history = {'train_loss': [], 'val_loss': [], 'train_acc': [], 'val_acc': []}
-        self.transition_log_probs = self._build_transition_log_probs(dataset, train_idx)
-        if self.sequence_lm_beta > 0.0 and not self.regression:
-            self.char_lm = self._build_char_lm(dataset, train_idx)
 
     def _build_transition_log_probs(self, dataset: Dataset, train_idx: List[int]) -> Optional[torch.Tensor]:
         if self.regression:

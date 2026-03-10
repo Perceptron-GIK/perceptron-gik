@@ -28,8 +28,8 @@ experiment:
       train_ratio: 0.8
       use_fsr: false
   use_augmentation: true
-  run_preprocess: true
-  export_dataset_csv: true
+  run_preprocess: false
+  export_dataset_csv: false
 
 model:
   model_type: "lstm"
@@ -44,7 +44,7 @@ model:
 train:
   split_strategy: "contiguous"  # "stratified_random" | "contiguous"
   split_seed: 42
-  use_weighted_sampler: false
+  use_weighted_sampler: true
   synthetic_multiplier: 1
   precompute_synthetic: true
   mixup_alpha: 0.2

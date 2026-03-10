@@ -64,7 +64,7 @@ train:
   lm_beta_values: [0.0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 0.7, 0.9, 1.0]  # list of floats — beta values to sweep for LM fusion tuning
   lm_use_interpolated: true   # true/false — interpolate orders 1..lm_order for LM
   lm_fusion_inference: true   # true/false — enable LM fusion in real-time inference
-  lm_inference_beta: 0.4      # float >= 0 — LM weight in inference; 0 = no LM; tune from eval output
+  lm_inference_beta: 0.3      # float >= 0 — LM weight in inference; 0 = no LM; tune from eval output
   lm_tta_passes: 5            # int >= 1 — TTA passes; 1 = no TTA; >1 averages over augmented forwards
   lm_tta_noise_std: 0.01       # float >= 0 — Gaussian noise std for TTA; 0 = no noise
   lm_tta_scale_jitter: 0.1    # float >= 0 — scale jitter for TTA; 0 = no jitter
