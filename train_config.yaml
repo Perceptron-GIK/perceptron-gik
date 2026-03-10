@@ -8,7 +8,7 @@ data:
     - "Right_53.csv"
 
 experiment:
-  mode: "coordinate" # "coordinate" or "classification"
+  mode: "classification" # "coordinate" or "classification"
   alignment_context:
     prev_windows: 0
     future_windows: 1
