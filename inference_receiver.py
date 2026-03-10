@@ -85,6 +85,13 @@ INFERENCE_CONFIG = {
 }
 
 TRAIN_CFG = config_data.get("train", {})
+
+# Simple models (CNN/RNN/LSTM) - optional alternative to GIK model for classification
+SIMPLE_MODEL_CFG = config_data.get("simple_model", {})
+SIMPLE_MODEL_ENABLED = bool(SIMPLE_MODEL_CFG.get("enabled", False)) and EXPERIMENT_MODE == "classification"
+SIMPLE_MODEL_PATH = os.path.join(PROJECT_ROOT, SIMPLE_MODEL_CFG.get("path", "models_trained/cnn_classifier.pt"))
+SIMPLE_MODEL_TYPE = SIMPLE_MODEL_CFG.get("type", "cnn")
+
 # LM fusion for real-time inference (classification only)
 LM_FUSION_ENABLED = EXPERIMENT_MODE == "classification" and TRAIN_CFG.get("lm_fusion_inference", False)
 LM_INFERENCE_BETA = float(TRAIN_CFG.get("lm_inference_beta", 0.4))
@@ -202,11 +209,53 @@ def _get_inference_lm() -> Optional[dict]:
         print(f"LM build failed: {e}, disabling LM fusion")
         return None
 
+def _get_simple_model_input_dim(model) -> Optional[int]:
+    """Infer expected input feature dim from simple model architecture."""
+    if hasattr(model, "convs") and model.convs:
+        return model.convs[0][0].in_channels
+    if hasattr(model, "rnn"):
+        return model.rnn.weight_ih_l0.shape[1]
+    if hasattr(model, "lstm"):
+        return model.lstm.weight_ih_l0.shape[1]
+    return None
+
+
 def _get_inference_model(input_dim: int):
-    """Load and cache model (reused across inferences)."""
+    """Load and cache model (reused across inferences). Uses simple model if enabled."""
     global _INFERENCE_MODEL
     if _INFERENCE_MODEL is not None and getattr(_INFERENCE_MODEL, "_gik_input_dim", None) == input_dim:
         return _INFERENCE_MODEL
+
+    if SIMPLE_MODEL_ENABLED:
+        from simple_models import (
+            SimpleCNNClassifier,
+            SimpleRNNClassifier,
+            SimpleLSTMClassifier,
+            load_classifier_checkpoint,
+        )
+        model_cls = {
+            "cnn": SimpleCNNClassifier,
+            "rnn": SimpleRNNClassifier,
+            "lstm": SimpleLSTMClassifier,
+        }.get(SIMPLE_MODEL_TYPE, SimpleCNNClassifier)
+        if not os.path.isfile(SIMPLE_MODEL_PATH):
+            raise FileNotFoundError(
+                f"Simple model not found: {SIMPLE_MODEL_PATH}. "
+                "Train with train_simple_models.ipynb and set simple_model.path in train_config.yaml"
+            )
+        model = load_classifier_checkpoint(model_cls, SIMPLE_MODEL_PATH, DEVICE)
+        expected_dim = _get_simple_model_input_dim(model)
+        if expected_dim is not None and input_dim != expected_dim:
+            raise ValueError(
+                f"Input dimension mismatch: preprocessing produced {input_dim} features, "
+                f"but simple model expects {expected_dim}. Ensure train_config (normalize, dim_reduction, "
+                f"append_prev_char) and data_dir match the setup used to train the simple model."
+            )
+        model._gik_input_dim = input_dim
+        _INFERENCE_MODEL = model
+        print(f"Loaded simple model: {SIMPLE_MODEL_TYPE} from {SIMPLE_MODEL_PATH}")
+        return model
+
     model = create_model(
         model_type=TRAINING_CONFIG["model_type"],
         hidden_dim_inner_model=TRAINING_CONFIG["hidden_dim_inner_model"],
@@ -236,6 +285,10 @@ def run_inference(
     prev_char: index of previous char (for preprocess input feature)
     history_chars: list of last (lm_order-1) chars for LM context
     """
+    append_prev_char = INFERENCE_CONFIG["append_prev_char"]
+    if SIMPLE_MODEL_ENABLED:
+        append_prev_char = True  # simple models expect prev_char in last 40 dims
+
     processed_data = preprocess(
         left_data=left,
         right_data=right,
@@ -251,7 +304,7 @@ def run_inference(
         dims_ratio=INFERENCE_CONFIG["dims_ratio"],
         root_dir=PROJECT_ROOT,
         training_dataset=PROCESSED_TRAINING_DATA,
-        append_prev_char=INFERENCE_CONFIG["append_prev_char"],
+        append_prev_char=append_prev_char,
     )
 
     input_dim = processed_data.shape[2]
@@ -260,7 +313,9 @@ def run_inference(
 
     with torch.no_grad():
         if EXPERIMENT_MODE == "classification":
-            if TTA_PASSES > 1 or TTA_NOISE_STD > 0.0 or TTA_SCALE_JITTER > 0.0:
+            if SIMPLE_MODEL_ENABLED:
+                logits = model(x.to(DEVICE)).squeeze(0).cpu()
+            elif TTA_PASSES > 1 or TTA_NOISE_STD > 0.0 or TTA_SCALE_JITTER > 0.0:
                 logits = get_logits_single_tta(
                     x, model, str(DEVICE),
                     tta_passes=TTA_PASSES,
@@ -368,6 +423,8 @@ async def process_queues(left_queue, right_queue):
 ## ================================================== ##
 
 async def main():
+    if SIMPLE_MODEL_ENABLED:
+        print(f"Simple model mode: {SIMPLE_MODEL_TYPE} (will load from {SIMPLE_MODEL_PATH} on first inference)")
     print("Waiting for GIK to appear...")
 
     data_queue_left = asyncio.Queue(MAX_QUEUE_SIZE)

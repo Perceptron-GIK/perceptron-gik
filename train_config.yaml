@@ -28,8 +28,8 @@ experiment:
       train_ratio: 0.8
       use_fsr: false
   use_augmentation: true
-  run_preprocess: false
-  export_dataset_csv: false
+  run_preprocess: true
+  export_dataset_csv: true
 
 model:
   model_type: "lstm"
@@ -41,6 +41,12 @@ model:
     dropout: 0.33580103298003944
     num_layers: 2
     bidirectional: false
+
+# Simple models (CNN/RNN/LSTM) for real-time inference - alternative to GIK model
+simple_model:
+  enabled: false
+  path: models_trained/cnn_classifier.pt  # path relative to project root
+  type: cnn  # cnn | rnn | lstm
 
 train:
   split_strategy: "contiguous"  # "stratified_random" | "contiguous"
