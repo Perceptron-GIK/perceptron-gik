@@ -89,12 +89,12 @@ class AlignData:
         if self.has_right:
             self.right.data = self.right.sorted_data
             if filter_fn is not None:
-                self.right.data = filter_fn(self.right.data)
+                self.right.data = filter_fn(self.right.data, "_R")
 
         if self.has_left:
             self.left.data = self.left.sorted_data
             if filter_fn is not None:
-                self.left.data = filter_fn(self.left.data)
+                self.left.data = filter_fn(self.left.data, "_L")
 
         # left_win = self.left.data[-left_pointer:, :-1] if self.has_left else None
         # right_win = self.right.data[-right_pointer:, :-1] if self.has_right else None
