@@ -19,7 +19,7 @@ from src.inference.align import AlignData
 from src.pre_processing.reduce_dim import reduce_dim
 from src.Constants.char_to_key import NUM_CLASSES, CHAR_TO_INDEX, INDEX_TO_CHAR, FULL_COORDS
 
-IMU_SAMPLING_RATE = 100.0
+IMU_SAMPLING_RATE = 28.57
 IMU_COLS = [0, 6, 13, 20, 27, 34]
 IMU_IDX_TO_PART = {
     0: "base",

@@ -1,4 +1,4 @@
-import asyncio, struct, time, os, sys, yaml, torch
+import asyncio, struct, time, os, sys, yaml, torch, re
 import numpy as np
 from typing import Callable, Any, Optional, Dict, List
 from bleak import BleakScanner, BleakClient
@@ -45,7 +45,7 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath('__file__'))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-TRAINING_CONFIG_PATH = os.path.join(PROJECT_ROOT, "train_config.yaml")
+TRAINING_CONFIG_PATH = os.path.join(PROJECT_ROOT, "train_config_positionoffset_3layerinner.yaml")
 with open(TRAINING_CONFIG_PATH, "r", encoding="utf-8") as f:
     config_data = yaml.safe_load(f)
 
@@ -100,13 +100,16 @@ TTA_SCALE_JITTER = float(TRAIN_CFG.get("lm_tta_scale_jitter", 0.0))
 _INFERENCE_LM: Optional[dict] = None
 _INFERENCE_MODEL: Optional[torch.nn.Module] = None
 
-MODEL_PATH = os.path.join(PROJECT_ROOT, "best_model.pt")
+MODEL_PATH = os.path.join(PROJECT_ROOT, "gik_model_positionoffset_3layerinner.pt")
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
 
 FSR_INDICES = [12, 19, 26, 33, 40]
 
 AUTOCORRECTOR = AutoCorrector(checker_type="pyspell", max_len=10)
+
+GROUND_TRUTH = "hello world how are you this is our invisible keyboard"
+inference_predictions = ""
 
 ## ================================================== ##
 # BLUETOOTH FUNCTIONS
@@ -281,6 +284,7 @@ def run_inference(
             predicted_idx = CHAR_TO_INDEX[get_closest_coordinate(model.predict_coords(x.to(DEVICE)), FULL_COORDS)]
 
     predicted_char = INDEX_TO_CHAR[predicted_idx]
+    inference_predictions += predicted_char
     # AUTOCORRECTOR.process_char(predicted_char)
     sys.stdout.write(predicted_char)
     sys.stdout.flush()
@@ -379,6 +383,19 @@ async def process_queues(left_queue, right_queue):
             events.append({"left": opp_chunk, "right": chunk})
         await decode_ready_events()
 
+def evaluate_inference(ground_truth, predictions):
+    predictions = re.sub("\b", "", predictions)
+    error, correct = 0, 0
+    seq_length = min(len(ground_truth), len(predictions))
+    for i in range(seq_length):
+        if ground_truth[i] == predictions[i]:
+            correct += 1
+        gt_coords = FULL_COORDS[ground_truth[i]]
+        pred_coords = FULL_COORDS[predictions[i]]
+        error += (gt_coords[0] - pred_coords[0])**2 + (gt_coords[1] - pred_coords[1])**2
+    acc = round((correct/seq_length)**100, 2)
+    return error, acc
+
 ## ================================================== ##
 
 async def main():
@@ -387,8 +404,12 @@ async def main():
     data_queue_left = asyncio.Queue(MAX_QUEUE_SIZE)
     data_queue_right = asyncio.Queue(MAX_QUEUE_SIZE)
 
-    await asyncio.gather(connect(DEVICE_NAME_L, UUID_TX_L, data_queue_left), 
-                         connect(DEVICE_NAME_R, UUID_TX_R, data_queue_right),
-                         process_queues(data_queue_left, data_queue_right))
-
+    try:
+        await asyncio.gather(connect(DEVICE_NAME_L, UUID_TX_L, data_queue_left), 
+                                connect(DEVICE_NAME_R, UUID_TX_R, data_queue_right),
+                                process_queues(data_queue_left, data_queue_right))
+    finally:
+            error, acc = evaluate_inference(GROUND_TRUTH, inference_predictions)
+            print(f"Inference Error: {error}, Inference Accuracy: {acc}%")
+    
 asyncio.run(main())
