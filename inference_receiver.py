@@ -1,4 +1,4 @@
-import asyncio, struct, time, os, sys, yaml, torch, re
+import asyncio, struct, time, os, sys, yaml, torch
 import numpy as np
 from typing import Callable, Any, Optional, Dict, List
 from bleak import BleakScanner, BleakClient
@@ -22,7 +22,10 @@ from ml.models.gik_model import create_model
 DEVICE_NAME_L = "GIK_Nano_L"
 DEVICE_NAME_R = "GIK_Nano_R"
 
-UUID_TX_L = "00001235-0000-1000-8000-00805f9b34fb" 
+# Service UUIDs from GIK_Hand_Config.h - discovery by UUID (Mac may cache name as "Arduino")
+SERVICE_UUID_L = "00001234-0000-1000-8000-00805f9b34fb"  # Left: ServiceID 1234
+SERVICE_UUID_R = "00001236-0000-1000-8000-00805f9b34fb"  # Right: ServiceID 1236
+UUID_TX_L = "00001235-0000-1000-8000-00805f9b34fb"
 UUID_TX_R = "00001237-0000-1000-8000-00805f9b34fb" 
 
 PACKER_DTYPE_DEF = "<I" +"f"*6 + ("f"*6 + "B")*5  
@@ -109,20 +112,29 @@ TTA_NOISE_STD = float(TRAIN_CFG.get("lm_tta_noise_std", 0.0))
 TTA_SCALE_JITTER = float(TRAIN_CFG.get("lm_tta_scale_jitter", 0.0))
 
 if LM_FUSION_ENABLED:
-    print(f"LM fusion enabled: beta={LM_INFERENCE_BETA}, order={LM_ORDER}, interpolated={LM_USE_INTERPOLATED}")
+    print(f"LM fusion enabled: beta={LM_INFERENCE_BETA}, order={LM_ORDER}, interpolated={LM_USE_INTERPOLATED}", file=sys.stderr)
 
 _INFERENCE_LM: Optional[dict] = None
 _INFERENCE_MODEL: Optional[torch.nn.Module] = None
 
-MODEL_PATH = os.path.join(PROJECT_ROOT, TRAIN_CFG.get("model_save_path", "gik_model.pt"))
+MODEL_PATH = os.path.join(PROJECT_ROOT, TRAIN_CFG.get("model_save_path", "gik_model_OP_.pt"))
 
-DEVICE = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
+# MPS (Mac) produces different numerical results than CUDA; can cause model to collapse to one class.
+# Force CPU on Mac for consistent predictions (matches CUDA-trained model). Set GIK_USE_MPS=1 to use MPS.
+_USE_MPS = os.environ.get("GIK_USE_MPS", "").lower() in ("1", "true", "yes")
+if torch.cuda.is_available():
+    DEVICE = "cuda"
+elif _USE_MPS and torch.backends.mps.is_available():
+    DEVICE = "mps"
+else:
+    DEVICE = "cpu"
+    if torch.backends.mps.is_available():
+        print("Using CPU for inference (MPS disabled; set GIK_USE_MPS=1 to use MPS)", file=sys.stderr)
 
 FSR_INDICES = [12, 19, 26, 33, 40]
 
 AUTOCORRECTOR = AutoCorrector(checker_type="pyspell", max_len=10)
 
-GROUND_TRUTH = "hello world how are you this is our invisible keyboard"
 inference_predictions = ""
 
 ## ================================================== ##
@@ -137,7 +149,7 @@ def handler_closure(queue: asyncio.Queue, side: str) -> Callable[[object, bytes]
         
         try:
             if len(data) != 153:
-                print(f"Unexpected length from {side} hand: {len(data)}")
+                print(f"Unexpected length from {side} hand: {len(data)}", file=sys.stderr)
                 return
             
             received_data = UNPACKER.unpack(data)
@@ -148,25 +160,33 @@ def handler_closure(queue: asyncio.Queue, side: str) -> Callable[[object, bytes]
             try:
                 queue.put_nowait((received_data, t))
             except asyncio.QueueFull:
-                print(f"{side} hand queue full, dropping packet {sample_id}")
+                print(f"{side} hand queue full, dropping packet {sample_id}", file=sys.stderr)
             
         except Exception as e:
-            print(f"Error in {side} handler: {e}")
+            print(f"Error in {side} handler: {e}", file=sys.stderr)
             import traceback
             traceback.print_exc()
     
     return handler 
 
-async def wait_for_nano(device_name):
+def _match_gik_device(service_uuid):
+    """Match by service UUID. Macs may cache 'Arduino' instead of GIK_Nano_L/R."""
+    def _match(d, ad):
+        uuids = ad.service_uuids or set()
+        return service_uuid in uuids
+    return _match
+
+
+async def wait_for_nano(service_uuid):
     nano = None
     while nano is None:
         nano = await BleakScanner.find_device_by_filter(
-            lambda d, ad: d.name == device_name,
+            _match_gik_device(service_uuid),
             timeout=1/DEVICE_SEARCH_RATE
         )
     return nano
 
-async def connect(device_name, uuid, queue):
+async def connect(device_name, service_uuid, char_uuid, queue):
     if "_R" in device_name:
         side = "right"
     elif "_L" in device_name:
@@ -176,24 +196,25 @@ async def connect(device_name, uuid, queue):
     while True:
         try:
             if retries == 0:
-                nano = await wait_for_nano(device_name)
-                print(f"Found GIK {side} hand")
+                nano = await wait_for_nano(service_uuid)
+                svc = service_uuid[4:8] if len(service_uuid) >= 8 else "?"
+                print(f"\nFound GIK {side} hand (device name: {nano.name!r}, service {svc})", file=sys.stderr)
 
             async with BleakClient(nano.address) as client:
                 retries = 0
-                await client.start_notify(uuid, handler_closure(queue, side))
-                print(f"Connected to GIK {side} hand, receiving data...")
+                await client.start_notify(char_uuid, handler_closure(queue, side))
+                print(f"\nConnected to GIK {side} hand, receiving data...", file=sys.stderr)
                 while client.is_connected:
                     await asyncio.sleep(1.0)
 
-            print(f"GIK {side} hand disconnected, attempting reconnection...")
+            print(f"\nGIK {side} hand disconnected, attempting reconnection...", file=sys.stderr)
             retries = 0
 
         except Exception as e:
             retries += 1
-            print(f"GIK {side} hand connection error (attempt {retries}): {e}")
+            print(f"\nGIK {side} hand connection error (attempt {retries}): {e}", file=sys.stderr)
             if retries >= BLE_MAX_RETRIES:
-                print(f"GIK {side} hand max retries reached - re-scanning...")
+                print(f"GIK {side} hand max retries reached - re-scanning...", file=sys.stderr)
                 retries = 0  
 
         await asyncio.sleep(BLE_RECONNECT_DELAY)
@@ -219,7 +240,7 @@ def _get_inference_lm() -> Optional[dict]:
             _INFERENCE_LM = build_char_ngram_lm(labels, order=LM_ORDER, add_k=LM_ADD_K)
         return _INFERENCE_LM
     except Exception as e:
-        print(f"LM build failed: {e}, disabling LM fusion")
+        print(f"LM build failed: {e}, disabling LM fusion", file=sys.stderr)
         return None
 
 def _get_simple_model_input_dim(model) -> Optional[int]:
@@ -270,7 +291,7 @@ def _get_inference_model(input_dim: int):
             )
         model._gik_input_dim = input_dim
         _INFERENCE_MODEL = model
-        print(f"Loaded simple model: {SIMPLE_MODEL_TYPE} from {SIMPLE_MODEL_PATH}")
+        print(f"Loaded simple model: {SIMPLE_MODEL_TYPE} from {SIMPLE_MODEL_PATH}", file=sys.stderr)
         return model
 
     model = create_model(
@@ -302,6 +323,8 @@ def run_inference(
     prev_char: index of previous char (for preprocess input feature)
     history_chars: list of last (lm_order-1) chars for LM context
     """
+    global inference_predictions
+    
     append_prev_char = INFERENCE_CONFIG["append_prev_char"]
     if SIMPLE_MODEL_ENABLED:
         append_prev_char = True  # simple models expect prev_char in last 40 dims
@@ -351,9 +374,7 @@ def run_inference(
 
     predicted_char = INDEX_TO_CHAR[predicted_idx]
     inference_predictions += predicted_char
-    # AUTOCORRECTOR.process_char(predicted_char)
-    sys.stdout.write(predicted_char)
-    sys.stdout.flush()
+    print(predicted_char, end="", flush=True)  # stdout: predictions only
     return predicted_idx
     
 async def process_queues(left_queue, right_queue):
@@ -404,80 +425,69 @@ async def process_queues(left_queue, right_queue):
                 events[:] = events[drop_n:]
                 event_offset = keep_from_abs_idx
                 max_abs_idx = event_offset + len(events) - 1
-    i =0
+    left_task = asyncio.create_task(left_queue.get())
+    right_task = asyncio.create_task(right_queue.get())
     while True:
-        left_task = asyncio.create_task(left_queue.get())
-        right_task = asyncio.create_task(right_queue.get())
         completed, _ = await asyncio.wait(
             [left_task, right_task],
             return_when=asyncio.FIRST_COMPLETED
         )
+        hands_with_new_data = []
         for task in completed:
             data, t = task.result()
             data = np.asarray(data, dtype=np.float32)
             data = np.concatenate([data[1:], [t]])
 
             if task == left_task:
-                left_win.append(data)      
+                left_win.append(data)
                 left_task = asyncio.create_task(left_queue.get())
-                triggered_hand = "left"
-
+                hands_with_new_data.append("left")
             elif task == right_task:
                 right_win.append(data)
                 right_task = asyncio.create_task(right_queue.get())
-                triggered_hand = "right"
-        
-        idx = left_win.fsr_detected(fsr_indices=FSR_INDICES) if triggered_hand == "left" else right_win.fsr_detected(fsr_indices=FSR_INDICES)
-        if idx is None:
-            continue
-        else:
-            print(f"FSR DETECTED {i}")
-            i += 1
-        chunk = np.stack(left_win.pop_chunk(idx+1)) if triggered_hand == "left" else np.stack(right_win.pop_chunk(idx+1))
-        if chunk.shape[0] <= 2:
-            continue
-        timestamp = chunk[-1][-1]
-        opp_idx = right_win.timestamp_matched(timestamp=timestamp) if triggered_hand == "left" else left_win.timestamp_matched(timestamp=timestamp)
-        if opp_idx:
-            opp_chunk = np.stack(right_win.pop_chunk(opp_idx+1)) if triggered_hand == "left" else np.stack(left_win.pop_chunk(opp_idx+1))
-        else:
-            opp_chunk = np.zeros_like(chunk)
+                hands_with_new_data.append("right")
 
-        if triggered_hand == "left":
-            events.append({"left": chunk, "right": opp_chunk})
-        else:
-            events.append({"left": opp_chunk, "right": chunk})
-        await decode_ready_events()
-
-def evaluate_inference(ground_truth, predictions):
-    predictions = re.sub("\b", "", predictions)
-    error, correct = 0, 0
-    seq_length = min(len(ground_truth), len(predictions))
-    for i in range(seq_length):
-        if ground_truth[i] == predictions[i]:
-            correct += 1
-        gt_coords = FULL_COORDS[ground_truth[i]]
-        pred_coords = FULL_COORDS[predictions[i]]
-        error += (gt_coords[0] - pred_coords[0])**2 + (gt_coords[1] - pred_coords[1])**2
-    acc = round((correct/seq_length)**100, 2)
-    return error, acc
+        # Check FSR on each hand that received new data; process first trigger only (avoid double-pop)
+        for triggered_hand in hands_with_new_data:
+            idx = left_win.fsr_detected(fsr_indices=FSR_INDICES) if triggered_hand == "left" else right_win.fsr_detected(fsr_indices=FSR_INDICES)
+            if idx is None:
+                continue
+            chunk = np.stack(left_win.pop_chunk(idx+1)) if triggered_hand == "left" else np.stack(right_win.pop_chunk(idx+1))
+            if chunk.shape[0] <= 2:
+                continue
+            timestamp = chunk[-1][-1]
+            opp_win = right_win if triggered_hand == "left" else left_win
+            opp_idx = opp_win.timestamp_matched(timestamp=timestamp)
+            if opp_idx is not None:
+                opp_chunk = np.stack(opp_win.pop_chunk(opp_idx + 1))
+            else:
+                opp_chunk = np.zeros_like(chunk)
+            if triggered_hand == "left":
+                events.append({"left": chunk, "right": opp_chunk})
+            else:
+                events.append({"left": opp_chunk, "right": chunk})
+            await decode_ready_events()
+            break  # one FSR event per iteration
 
 ## ================================================== ##
 
 async def main():
     if SIMPLE_MODEL_ENABLED:
-        print(f"Simple model mode: {SIMPLE_MODEL_TYPE} (will load from {SIMPLE_MODEL_PATH} on first inference)")
-    print("Waiting for GIK to appear...")
+        print(f"Simple model mode: {SIMPLE_MODEL_TYPE} (will load from {SIMPLE_MODEL_PATH} on first inference)", file=sys.stderr)
+    print("Waiting for GIK to appear...", file=sys.stderr)
 
     data_queue_left = asyncio.Queue(MAX_QUEUE_SIZE)
     data_queue_right = asyncio.Queue(MAX_QUEUE_SIZE)
 
+    await asyncio.gather(
+        connect(DEVICE_NAME_L, SERVICE_UUID_L, UUID_TX_L, data_queue_left),
+        connect(DEVICE_NAME_R, SERVICE_UUID_R, UUID_TX_R, data_queue_right),
+        process_queues(data_queue_left, data_queue_right),
+    )
+
+
+if __name__ == "__main__":
     try:
-        await asyncio.gather(connect(DEVICE_NAME_L, UUID_TX_L, data_queue_left), 
-                                connect(DEVICE_NAME_R, UUID_TX_R, data_queue_right),
-                                process_queues(data_queue_left, data_queue_right))
-    finally:
-            error, acc = evaluate_inference(GROUND_TRUTH, inference_predictions)
-            print(f"Inference Error: {error}, Inference Accuracy: {acc}%")
-    
-asyncio.run(main())
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        sys.exit(0)

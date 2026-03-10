@@ -49,12 +49,10 @@ class SlidingWindow:
     
     def timestamp_matched(self, timestamp):
         '''
-        Returns the row index with corresponding timestamp just before the given one
-        Used to identify which samples to extract from the opposite hand where FSR was not detected
+        Returns the row index with corresponding timestamp just before the given one.
+        Used to identify which samples to extract from the opposite hand where FSR was not detected.
         '''
         for i in range(1, len(self.data)):
             if self.data[i][-1] > timestamp:
-                return i-1
-            continue
+                return i - 1
         return None
-        

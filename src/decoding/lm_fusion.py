@@ -134,7 +134,7 @@ def fuse_single_step_logits_with_lm(
     history_chars: Sequence[str],
     beta: float,
 ) -> torch.Tensor:
-    """Fuse model logits with LM for single-char inference: fused = logits + beta * lm_log_probs."""
+    """Bayesian fusion (matches training): log posterior = log_softmax(logits) + beta * lm_log_probs."""
     if beta <= 0.0:
         return logits
     idx_to_char = _idx_to_char_map()
@@ -143,7 +143,8 @@ def fuse_single_step_logits_with_lm(
         ch = idx_to_char.get(i, "")
         if ch:
             lm_lp[..., i] = _lm_log_prob_dispatch(lm, history_chars, ch)
-    return logits + beta * lm_lp
+    log_p_model = F.log_softmax(logits, dim=-1)
+    return log_p_model + beta * lm_lp
 
 
 def get_logits_single_tta(

@@ -51,13 +51,13 @@ train:
   use_ema: false
   ema_decay: 0.998
   early_stopping_metric: "val_acc"
-  lm_order: 4
+  lm_order: 5
   lm_add_k: 0.05
   lm_beam_width: 25
   lm_beta_values: [0.0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 0.7, 0.9, 1.0]
   lm_use_interpolated: true
   lm_fusion_inference: true
-  lm_inference_beta: 0.5
+  lm_inference_beta: 0.7
   lm_tta_passes: 1
   lm_tta_noise_std: 0.01
   lm_tta_scale_jitter: 0.1

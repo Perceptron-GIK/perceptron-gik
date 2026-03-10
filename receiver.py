@@ -12,12 +12,15 @@ from src.keyboard.keyboard_ext import start_keyboard, stop_event
 import cProfile
 
 # CONSTANTS 
-DEVICE_NAME_L = "GIK_Nano_L" # Left hand nano name
-DEVICE_NAME_R = "GIK_Nano_R" # Right hand nano name
+DEVICE_NAME_L = "GIK_Nano_L" # Left hand nano name (may advertise as "Arduino" on some Macs)
+DEVICE_NAME_R = "GIK_Nano_R" # Right hand nano name (may advertise as "Arduino" on some Macs)
 KEYBOARD_NAME = "Keyboard"
 
-UUID_TX_L = "00001235-0000-1000-8000-00805f9b34fb" # Left hand TX characteristic UUID
-UUID_TX_R = "00001237-0000-1000-8000-00805f9b34fb" # Right hand TX characteristic UUID
+# Service UUIDs from GIK_Hand_Config.h - use these to find devices when name is cached wrong
+SERVICE_UUID_L = "00001234-0000-1000-8000-00805f9b34fb"  # Left: ServiceID 1234
+SERVICE_UUID_R = "00001236-0000-1000-8000-00805f9b34fb"  # Right: ServiceID 1236
+UUID_TX_L = "00001235-0000-1000-8000-00805f9b34fb"  # Left hand TX characteristic (CharID 1235)
+UUID_TX_R = "00001237-0000-1000-8000-00805f9b34fb"  # Right hand TX characteristic (CharID 1237)
 
 PACKER_DTYPE_DEF = "<I" +"f"*6 + ("f"*6 + "B")*5  # little-endian
 assert struct.calcsize(PACKER_DTYPE_DEF) == 153 # match the packet size
@@ -199,17 +202,7 @@ def print_data(bluetooth_data: list) -> None:
 
 
 def handler_closure(queue: asyncio.Queue, side: str) -> Callable[[object, bytes], None]:
-    first_sample_id = None
-    last_sample_id = None
-    packet_count = 0
-    gap_count = 0  # Track total missed packets
-    handler_times = []  # Track handler performance
-    
     def handler(sender, data):
-        nonlocal first_sample_id, last_sample_id, packet_count, gap_count
-        
-        # start_time = time.perf_counter()  # Start timing (for debugging uncomment to run)
-        
         try:
             if len(data) != 153:
                 print(f"Unexpected length from hand {side}: {len(data)}")
@@ -217,48 +210,12 @@ def handler_closure(queue: asyncio.Queue, side: str) -> Callable[[object, bytes]
             
             received_data = UNPACKER.unpack(data)
             sample_id = int(received_data[0])
-
             t = time.time()
             
             try:
                 queue.put_nowait((received_data, t))
             except asyncio.QueueFull:
                 print(f"{side} Hand queue full, dropping packet {sample_id}")
-            
-            # For debugging and dropout checking (uncomment to run)
-            
-            # # Track first packet received
-            # if first_sample_id is None:
-            #     first_sample_id = sample_id
-            #     print(f"\n{side} Hand first packet sample_id={sample_id}\n")
-            
-            # # Count gaps 
-            # if last_sample_id is not None:
-            #     expected = last_sample_id + 1
-            #     if sample_id != expected:
-            #         gap_count += (sample_id - expected)
-            
-            # last_sample_id = sample_id
-            # packet_count += 1
-            
-            # elapsed_us = (time.perf_counter() - start_time) * 1_000_000  # microseconds
-            # handler_times.append(elapsed_us)
-            
-            # # Print summary every 250 packets
-            # if packet_count % 250 == 0:
-            #     total_sent = packet_count + gap_count
-            #     loss_rate = (gap_count / total_sent) * 100 if total_sent > 0 else 0
-                
-            #     # Calculate handler performance
-            #     avg_time = sum(handler_times) / len(handler_times)
-            #     p95_time = sorted(handler_times)[int(len(handler_times) * 0.95)]
-            #     max_time = max(handler_times)
-                
-            #     print(f"{side}: {packet_count} received, {gap_count} missed, {loss_rate:.2f}% loss")
-            #     print(f"{side}: Handler avg={avg_time:.0f}µs, p95={p95_time:.0f}µs, max={max_time:.0f}µs")
-                
-            #     handler_times.clear()
-                
         except Exception as e:
             print(f"ERROR in {side} handler: {e}")
             import traceback
@@ -267,7 +224,15 @@ def handler_closure(queue: asyncio.Queue, side: str) -> Callable[[object, bytes]
     return handler 
 
 
-async def wait_for_nano(device_name):
+def _match_gik_device(service_uuid):
+    """Match by service UUID. Macs may cache 'Arduino' instead of GIK_Nano_L/R, so name is unreliable."""
+    def _match(d, ad):
+        uuids = ad.service_uuids or set()
+        return service_uuid in uuids
+    return _match
+
+
+async def wait_for_nano(service_uuid):
     nano = None
     while nano is None:
         nano = await BleakScanner.find_device_by_filter(
@@ -278,7 +243,7 @@ async def wait_for_nano(device_name):
     return nano
 
 
-async def connect(device_name, uuid, queue):
+async def connect(device_name, service_uuid, char_uuid, queue):
     global keyboard_started
     
     # To distinguish left and right from the device name
@@ -307,13 +272,13 @@ async def connect(device_name, uuid, queue):
         try:
             # Scan for the device (re-scan if we exhausted retries)
             if retries == 0:
-                nano = await wait_for_nano(device_name)
+                nano = await wait_for_nano(service_uuid)
                 print(f"Found GIK {side} Hand")
 
             async with BleakClient(nano.address) as client:
                 retries = 0
                 # Upon receiving notification from the nano we call the handler function
-                await client.start_notify(uuid, handler_closure(queue, side))
+                await client.start_notify(char_uuid, handler_closure(queue, side))
                 print(f"Connected to GIK {side} Hand - receiving data")
                 while client.is_connected and not stop_event.is_set():
                     await asyncio.sleep(1.0) # Keep the connection and dont need to be too fast (free up CPU)
@@ -338,7 +303,10 @@ async def main():
     data_queue_right = asyncio.Queue(MAX_QUEUE_SIZE)
 
     # Run both left and right hand connections concurrently
-    await asyncio.gather(connect(DEVICE_NAME_L, UUID_TX_L, data_queue_left), connect(DEVICE_NAME_R, UUID_TX_R, data_queue_right))
+    await asyncio.gather(
+        connect(DEVICE_NAME_L, SERVICE_UUID_L, UUID_TX_L, data_queue_left),
+        connect(DEVICE_NAME_R, SERVICE_UUID_R, UUID_TX_R, data_queue_right),
+    )
 
 #cProfile.run('asyncio.run(main())') # Run with profiler
 asyncio.run(main())

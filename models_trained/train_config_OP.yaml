@@ -1,0 +1,97 @@
+data:
+  data_dir: data_jun_4
+  keyboard_files:
+    - "Keyboard_53.csv"
+  left_files:
+    - "Left_53.csv"
+  right_files:
+    - "Right_53.csv"
+
+experiment:
+  mode: "classification"  # "coordinate" or "classification"
+  alignment_context:
+    prev_windows: 0
+    future_windows: 2
+  append_prev_char_feature: false
+  max_seq_length: 15
+  normalize:
+    enabled: false
+    per_seq: false
+  apply_filtering: true
+  use_class_weights: false
+  dim_reduction:
+    enabled: false
+    method: pca
+    pca:
+      dims_ratio: 0.6
+      fit_on_train_only: true
+      train_ratio: 0.8
+      use_fsr: false
+  use_augmentation: true
+  run_preprocess: false
+  export_dataset_csv: false
+
+model:
+  model_type: "lstm"
+  hidden_dim_inner_model: 256
+  hidden_dim_classification_head: 2048
+  num_layers: 1
+  dropout: 0.4608
+  inner_model_prams:
+    dropout: 0.476
+    num_layers: 3
+
+train:
+  split_strategy: "contiguous"  # "stratified_random" | "contiguous"
+  split_seed: 42
+  use_weighted_sampler: true
+  synthetic_multiplier: 1
+  precompute_synthetic: true
+  mixup_alpha: 0.2
+  use_ema: false
+  ema_decay: 0.998
+  early_stopping_metric: "val_acc"
+  lm_order: 5
+  lm_add_k: 0.05
+  lm_beam_width: 25
+  lm_beta_values: [0.0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 0.7, 0.9, 1.0]
+  lm_use_interpolated: true
+  lm_fusion_inference: true
+  lm_inference_beta: 0.7
+  lm_tta_passes: 1
+  lm_tta_noise_std: 0.01
+  lm_tta_scale_jitter: 0.1
+  sequence_lm_beta: 0.5       # Bayesian LM fusion during training
+  sequence_aux_weight: 0.7    # weight of fused_logits aux loss
+  use_prev_from_labels: true  # use _prev_labels for LM (no append_prev_char)
+  reverse_time_aug_prob: 0.3
+  batch_size: 32
+  learning_rate: 0.0005605
+  weight_decay: 2.694617753114531e-06
+  epochs: 300
+  early_stopping: 20
+  model_save_path: "gik_model.pt"  # used by train + inference_receiver
+
+modes:
+  classification:
+    use_class_weights: false
+    output_logits: "NUM_CLASSES"
+    is_one_hot: true
+    key_mapping_dict: CHAR_TO_INDEX
+    return_class_id: false
+    regression: false
+    loss: FocalLoss
+    loss_params:
+      gamma: 1.5
+
+  coordinate:
+    use_class_weights: true
+    output_logits: 2
+    is_one_hot: false
+    key_mapping_dict: "FULL_COORDS"
+    return_class_id: true
+    regression: true
+    loss: CoordinateLossClassification
+    loss_params:
+      h_v_ratio: 0.8
+      bias: 0.3
