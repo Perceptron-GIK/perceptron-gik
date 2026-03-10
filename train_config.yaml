@@ -1,11 +1,11 @@
 data:
-  data_dir: data_jun_4
+  data_dir: data_hazel_7
   keyboard_files:
-    - "Keyboard_53.csv"
+    - "Keyboard_20.csv"
   left_files:
-    - "Left_53.csv"
+    - "Left_20.csv"
   right_files:
-    - "Right_53.csv"
+    - "Right_14.csv"
 
 experiment:
   mode: "classification"  # "coordinate" or "classification"
@@ -28,8 +28,8 @@ experiment:
       train_ratio: 0.8
       use_fsr: false
   use_augmentation: true
-  run_preprocess: false
-  export_dataset_csv: false
+  run_preprocess: true
+  export_dataset_csv: true
 
 model:
   model_type: "lstm"
