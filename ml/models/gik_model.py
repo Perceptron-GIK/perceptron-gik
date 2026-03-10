@@ -37,6 +37,73 @@ from src.decoding.lm_fusion import (
     beam_decode_with_lm,
     sequence_accuracy,
 )
+from simple_models import fuse_batch_logits_with_lm, extract_prev_idx
+
+
+def _resolve_raw_idx_and_root(dataset: Dataset, idx: int) -> Tuple[Optional[Dataset], int]:
+    """Resolve dataset index to (root_dataset, raw_idx). Returns (None, -1) if not resolvable."""
+    if hasattr(dataset, "indices"):
+        # Subset
+        sub = dataset
+        if idx < 0 or idx >= len(sub.indices):
+            return None, -1
+        raw_idx = int(sub.indices[idx])
+        root = sub.dataset
+        while hasattr(root, "indices"):
+            raw_idx = int(root.indices[raw_idx])
+            root = root.dataset
+        return root, raw_idx
+    if hasattr(dataset, "base"):
+        # AugmentedDataset
+        aug = dataset
+        base = aug.base
+        n_base = len(base)
+        if idx < n_base:
+            root, raw_idx = _resolve_raw_idx_and_root(base, idx)
+            return root, raw_idx
+        # Virtual (on-the-fly) synthetic: base_idx = (idx - n_base) % n_base
+        virtual_syn = 0
+        if getattr(aug, "synthetic_multiplier", 0) > 0 and getattr(aug, "use_augmentation", False) and not getattr(aug, "precompute_synthetic", False):
+            virtual_syn = getattr(aug, "synthetic_multiplier", 0) * n_base
+        if idx < n_base + virtual_syn:
+            base_idx = (idx - n_base) % n_base if idx >= n_base else idx
+            return _resolve_raw_idx_and_root(base, base_idx)
+        # Precomputed synthetic
+        syn_idx = idx - n_base - virtual_syn
+        n_syn = len(getattr(aug, "synthetic_samples", []))
+        if syn_idx >= 0 and syn_idx < n_syn:
+            mult = max(1, getattr(aug, "synthetic_multiplier", 1))
+            base_idx = syn_idx // mult
+            return _resolve_raw_idx_and_root(base, base_idx)
+        return None, -1
+    return dataset, idx
+
+
+class DatasetWithPrevIdx(Dataset):
+    """Wraps a dataset to return (x, y, prev_idx) where prev_idx comes from _prev_labels."""
+
+    def __init__(self, dataset: Dataset):
+        self.dataset = dataset
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, int]:
+        item = self.dataset[idx]
+        if len(item) == 3:
+            x, y, raw_label = item
+        else:
+            x, y = item
+        root, raw_idx = _resolve_raw_idx_and_root(self.dataset, idx)
+        prev_idx = -1
+        if root is not None and raw_idx >= 0:
+            prev_labels = getattr(root, "_prev_labels", None)
+            char_to_idx = getattr(root, "_char_to_index", None)
+            if isinstance(prev_labels, list) and isinstance(char_to_idx, dict) and raw_idx < len(prev_labels):
+                prev_char = prev_labels[raw_idx]
+                prev_idx = int(char_to_idx.get(prev_char, -1)) if prev_char else -1
+        return x, y, prev_idx
+
 
 class GIKModelWrapper(nn.Module):
     """
@@ -192,6 +259,11 @@ class GIKTrainer:
         ema_decay: float = 0.999,
         sequence_lm_beta: float = 0.0,
         sequence_aux_weight: float = 0.5,
+        lm_order: int = 3,
+        lm_add_k: float = 0.05,
+        lm_use_interpolated: bool = True,
+        lm_order_weights: Optional[List[float]] = None,
+        use_prev_from_labels: bool = True,
         reverse_time_aug_prob: float = 0.0,
         loss: callable = nn.CrossEntropyLoss,
         loss_kwargs: Optional[Dict] = None,
@@ -313,16 +385,31 @@ class GIKTrainer:
                 weights = torch.tensor(base_weights + syn_weights, dtype=torch.double)
                 sampler = WeightedRandomSampler(weights=weights, num_samples=len(weights), replacement=True)
 
-        self.train_loader = DataLoader(self.train_dataset_aug,batch_size=batch_size,shuffle=(sampler is None),sampler=sampler,num_workers=0,)
-        self.val_loader = DataLoader(self.val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
-        self.test_loader = DataLoader(self.test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+        train_ds_for_loader = self.train_dataset_aug
+        val_ds_for_loader = self.val_dataset
+        test_ds_for_loader = self.test_dataset
+        if self.use_prev_from_labels and self.char_lm is not None and not self.regression:
+            train_ds_for_loader = DatasetWithPrevIdx(self.train_dataset_aug)
+            val_ds_for_loader = DatasetWithPrevIdx(self.val_dataset)
+            test_ds_for_loader = DatasetWithPrevIdx(self.test_dataset)
+
+        self.train_loader = DataLoader(train_ds_for_loader, batch_size=batch_size, shuffle=(sampler is None), sampler=sampler, num_workers=0)
+        self.val_loader = DataLoader(val_ds_for_loader, batch_size=batch_size, shuffle=False, num_workers=0)
+        self.test_loader = DataLoader(test_ds_for_loader, batch_size=batch_size, shuffle=False, num_workers=0)
 
         self.mixup_alpha = float(mixup_alpha)
         self.use_ema = bool(use_ema)
         self.ema_decay = float(ema_decay)
         self.sequence_lm_beta = float(sequence_lm_beta)
         self.sequence_aux_weight = float(sequence_aux_weight)
-        self.transition_log_probs: Optional[torch.Tensor] = None
+        self.lm_order = int(lm_order)
+        self.lm_add_k = float(lm_add_k)
+        self.lm_use_interpolated = bool(lm_use_interpolated)
+        self.lm_order_weights = lm_order_weights
+        self.use_prev_from_labels = bool(use_prev_from_labels)
+        self.transition_log_probs: Optional[torch.Tensor] = None  # legacy bigram; kept for fallback
+        self.char_lm: Optional[Dict[str, Any]] = None
+        self.idx_to_char: Dict[int, str] = {int(i): ch for i, ch in INDEX_TO_CHAR.items()}
         self.ema_model: Optional[nn.Module] = None
         if self.use_ema:
             self.ema_model = copy.deepcopy(self.model).to(self.device)
@@ -340,6 +427,8 @@ class GIKTrainer:
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
         self.history = {'train_loss': [], 'val_loss': [], 'train_acc': [], 'val_acc': []}
         self.transition_log_probs = self._build_transition_log_probs(dataset, train_idx)
+        if self.sequence_lm_beta > 0.0 and not self.regression:
+            self.char_lm = self._build_char_lm(dataset, train_idx)
 
     def _build_transition_log_probs(self, dataset: Dataset, train_idx: List[int]) -> Optional[torch.Tensor]:
         if self.regression:
@@ -365,6 +454,25 @@ class GIKTrainer:
                 counts[p_idx, y_idx] += 1.0
         probs = counts / counts.sum(dim=1, keepdim=True).clamp_min(1.0)
         return torch.log(probs.to(self.device))
+
+    def _build_char_lm(self, dataset: Dataset, train_idx: List[int]) -> Optional[Dict[str, Any]]:
+        """Build n-gram LM from train chars (same as simple models)."""
+        labels = getattr(dataset, "_labels", None)
+        if not isinstance(labels, list):
+            return None
+        train_chars = [labels[i] for i in train_idx]
+        if self.lm_use_interpolated and self.lm_order > 1:
+            return build_interpolated_char_lm(
+                train_chars,
+                max_order=self.lm_order,
+                add_k=self.lm_add_k,
+                order_weights=self.lm_order_weights,
+            )
+        return build_char_ngram_lm(
+            train_chars,
+            order=self.lm_order,
+            add_k=self.lm_add_k,
+        )
 
     def _extract_prev_idx_from_input(self, batch_x: torch.Tensor) -> Optional[torch.Tensor]:
         """Infer previous-character one-hot from appended input features."""
@@ -405,9 +513,13 @@ class GIKTrainer:
 
         for data in self.train_loader:
             batch_x, batch_y, raw_labels = None, None, None
+            batch_prev_idx = None
             if self.regression:
                 batch_x, batch_y, raw_labels = data
                 raw_labels = raw_labels.to(self.device)
+            elif len(data) == 3 and self.use_prev_from_labels and self.char_lm is not None:
+                batch_x, batch_y, batch_prev_idx = data
+                batch_prev_idx = batch_prev_idx.to(self.device)
             else:
                 batch_x, batch_y = data
             batch_x = batch_x.to(self.device)
@@ -437,14 +549,29 @@ class GIKTrainer:
                     loss = lam * self.criterion(logits, target_a) + (1.0 - lam) * self.criterion(logits, target_b)
                 else:
                     loss = self.criterion(logits, targets)
-                    if self.sequence_lm_beta > 0.0 and self.transition_log_probs is not None:
-                        prev_idx = self._extract_prev_idx_from_input(batch_x)
-                        if prev_idx is not None:
-                            lm_logits = self.transition_log_probs[prev_idx]
-                            fused_logits = logits + self.sequence_lm_beta * lm_logits
-                            fused_loss = self.criterion(fused_logits, targets)
+                    if self.sequence_lm_beta > 0.0:
+                        if batch_prev_idx is not None:
+                            prev_idx = batch_prev_idx
+                        else:
+                            prev_idx = extract_prev_idx(batch_x, self.model.num_classes)
+                            if prev_idx is None:
+                                prev_idx = self._extract_prev_idx_from_input(batch_x)
+                        if prev_idx is not None and self.char_lm is not None:
+                            fused_log_probs = fuse_batch_logits_with_lm(
+                                logits, self.char_lm, prev_idx,
+                                self.sequence_lm_beta, self.idx_to_char,
+                            )
+                            fused_loss = F.nll_loss(fused_log_probs, targets)
                             w = self.sequence_aux_weight
                             loss = (1.0 - w) * loss + w * fused_loss
+                        elif self.transition_log_probs is not None:
+                            prev_idx = self._extract_prev_idx_from_input(batch_x)
+                            if prev_idx is not None:
+                                lm_logits = self.transition_log_probs[prev_idx]
+                                fused_logits = logits + self.sequence_lm_beta * lm_logits
+                                fused_loss = self.criterion(fused_logits, targets)
+                                w = self.sequence_aux_weight
+                                loss = (1.0 - w) * loss + w * fused_loss
                 pred = logits.argmax(dim=-1)
                 correct += (pred == targets).sum().item()
             total += batch_x.size(0)
@@ -467,9 +594,13 @@ class GIKTrainer:
 
         for data in self.val_loader:
             batch_x, batch_y, raw_labels = None, None, None
+            batch_prev_idx = None
             if self.regression:
                 batch_x, batch_y, raw_labels = data
                 raw_labels = raw_labels.to(self.device)
+            elif len(data) == 3 and self.use_prev_from_labels and self.char_lm is not None:
+                batch_x, batch_y, batch_prev_idx = data
+                batch_prev_idx = batch_prev_idx.to(self.device)
             else:
                 batch_x, batch_y = data
             batch_x = batch_x.to(self.device)
@@ -485,7 +616,15 @@ class GIKTrainer:
                 correct += sum([preds[i] == trues[i] for i in range(n_batch)])    
             else:
                 loss = self.criterion(logits, batch_y.argmax(dim=-1))
-                pred = logits.argmax(dim=-1)
+                prev_idx = batch_prev_idx if batch_prev_idx is not None else (extract_prev_idx(batch_x, self.model.num_classes) if self.char_lm else None)
+                if prev_idx is not None and self.char_lm is not None and self.sequence_lm_beta > 0.0:
+                    fused = fuse_batch_logits_with_lm(
+                        logits, self.char_lm, prev_idx,
+                        self.sequence_lm_beta, self.idx_to_char,
+                    )
+                    pred = fused.argmax(dim=-1)
+                else:
+                    pred = logits.argmax(dim=-1)
                 correct += (pred == batch_y.argmax(dim=-1)).sum().item()
             total_loss += loss.item() * batch_x.size(0)
             total += batch_x.size(0)
@@ -502,9 +641,13 @@ class GIKTrainer:
         
         for data in self.test_loader:
             batch_x, batch_y, raw_labels = None, None, None
+            batch_prev_idx = None
             if self.regression:
                 batch_x, batch_y, raw_labels = data
                 raw_labels = raw_labels.to(self.device)
+            elif len(data) == 3 and self.use_prev_from_labels and self.char_lm is not None:
+                batch_x, batch_y, batch_prev_idx = data
+                batch_prev_idx = batch_prev_idx.to(self.device)
             else:
                 batch_x, batch_y = data
             batch_x, batch_y = batch_x.to(self.device), batch_y.to(self.device)
@@ -518,7 +661,16 @@ class GIKTrainer:
                 correct += sum([preds[i] == trues[i] for i in range(n_batch)])
             else:
                 loss = self.criterion(logits, batch_y.argmax(dim=-1))
-                correct += (logits.argmax(dim=-1) == batch_y.argmax(dim=-1)).sum().item()
+                prev_idx = batch_prev_idx if batch_prev_idx is not None else (extract_prev_idx(batch_x, self.model.num_classes) if self.char_lm else None)
+                if prev_idx is not None and self.char_lm is not None and self.sequence_lm_beta > 0.0:
+                    fused = fuse_batch_logits_with_lm(
+                        logits, self.char_lm, prev_idx,
+                        self.sequence_lm_beta, self.idx_to_char,
+                    )
+                    pred = fused.argmax(dim=-1)
+                else:
+                    pred = logits.argmax(dim=-1)
+                correct += (pred == batch_y.argmax(dim=-1)).sum().item()
             total_loss += loss.item() * batch_x.size(0)
             total += batch_x.size(0)
 

@@ -114,14 +114,20 @@ def preprocess(
     append_prev_char: bool = True,
 ):
     '''
-    Preprocess a single window of data
+    Preprocess a single window of data for real-time inference.
+
+    LM fusion support: When lm_fusion_inference is enabled in train config,
+    the caller (inference_receiver) passes prev_char from the last prediction
+    and builds history_chars for n-gram LM context. Set append_prev_char=True
+    when the model was trained with append_prev_char_feature (required for
+    simple models; optional for GIK models).
 
     Args:
         left_data: Array of data from the left hand
         right_data: Array of data from the right hand
         left_pointer: Index at which the current left hand inference window starts
         right_pointer: Index at which the current right hand inference window starts
-        prev_char: Index of previous character prediction
+        prev_char: Index of previous character prediction (for add_prev_char and LM history)
         mode: "classification" or "regression"
         max_seq_length: Window length for data alignment
         normalize: Whether to normalise the data
@@ -130,8 +136,9 @@ def preprocess(
         dim_red_method: Method of dimensionality reduction (if applicable)
         dims_ratio: Proportion of dimensions to keep (for PCA only)
         root_dir: Project root containing PCA params file
-        training_dataset: File path to the processed dataset from training 
-    
+        training_dataset: File path to the processed dataset from training
+        append_prev_char: If True, append prev_char one-hot/coords to input (match training)
+
     Returns:
         A single PyTorch tensor of processed data from both hands
     '''

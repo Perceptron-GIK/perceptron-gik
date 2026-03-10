@@ -45,7 +45,11 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath('__file__'))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-TRAINING_CONFIG_PATH = os.path.join(PROJECT_ROOT, "train_config_positionoffset_3layerinner.yaml")
+# Config path: use env var, or train_config.yaml
+_DEFAULT_CONFIG = os.path.join(PROJECT_ROOT, "train_config.yaml")
+TRAINING_CONFIG_PATH = os.environ.get("GIK_TRAIN_CONFIG", _DEFAULT_CONFIG)
+if not os.path.isfile(TRAINING_CONFIG_PATH):
+    TRAINING_CONFIG_PATH = _DEFAULT_CONFIG
 with open(TRAINING_CONFIG_PATH, "r", encoding="utf-8") as f:
     config_data = yaml.safe_load(f)
 
@@ -104,10 +108,13 @@ TTA_PASSES = max(1, int(TRAIN_CFG.get("lm_tta_passes", 1)))
 TTA_NOISE_STD = float(TRAIN_CFG.get("lm_tta_noise_std", 0.0))
 TTA_SCALE_JITTER = float(TRAIN_CFG.get("lm_tta_scale_jitter", 0.0))
 
+if LM_FUSION_ENABLED:
+    print(f"LM fusion enabled: beta={LM_INFERENCE_BETA}, order={LM_ORDER}, interpolated={LM_USE_INTERPOLATED}")
+
 _INFERENCE_LM: Optional[dict] = None
 _INFERENCE_MODEL: Optional[torch.nn.Module] = None
 
-MODEL_PATH = os.path.join(PROJECT_ROOT, "gik_model_positionoffset_3layerinner.pt")
+MODEL_PATH = os.path.join(PROJECT_ROOT, TRAIN_CFG.get("model_save_path", "gik_model.pt"))
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
 
