@@ -217,6 +217,8 @@ def _get_simple_model_input_dim(model) -> Optional[int]:
         return model.rnn.weight_ih_l0.shape[1]
     if hasattr(model, "lstm"):
         return model.lstm.weight_ih_l0.shape[1]
+    if hasattr(model, "resblock1"):
+        return model.resblock1.conv1.in_channels
     return None
 
 
@@ -231,12 +233,14 @@ def _get_inference_model(input_dim: int):
             SimpleCNNClassifier,
             SimpleRNNClassifier,
             SimpleLSTMClassifier,
+            SimpleCNNLSTMClassifier,
             load_classifier_checkpoint,
         )
         model_cls = {
             "cnn": SimpleCNNClassifier,
             "rnn": SimpleRNNClassifier,
             "lstm": SimpleLSTMClassifier,
+            "cnn-lstm": SimpleCNNLSTMClassifier,
         }.get(SIMPLE_MODEL_TYPE, SimpleCNNClassifier)
         if not os.path.isfile(SIMPLE_MODEL_PATH):
             raise FileNotFoundError(

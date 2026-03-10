@@ -4,6 +4,7 @@ from .models import (
     SimpleCNNClassifier,
     SimpleRNNClassifier,
     SimpleLSTMClassifier,
+    SimpleCNNLSTMClassifier,
 )
 from .fusion import fuse_batch_logits_with_lm, extract_prev_idx
 from .inference import (
@@ -18,6 +19,7 @@ __all__ = [
     "SimpleCNNClassifier",
     "SimpleRNNClassifier",
     "SimpleLSTMClassifier",
+    "SimpleCNNLSTMClassifier",
     "fuse_batch_logits_with_lm",
     "extract_prev_idx",
     "build_lm_from_data",

@@ -128,7 +128,20 @@ def load_classifier_checkpoint(model_cls, ckpt_path, device, num_classes=NUM_CLA
         input_dim = state_dict["rnn.weight_ih_l0"].shape[1]
     elif state_dict and "lstm.weight_ih_l0" in state_dict:
         input_dim = state_dict["lstm.weight_ih_l0"].shape[1]
-    model = model_cls(input_dim=input_dim, num_classes=num_classes).to(device)
+    elif state_dict and "resblock1.conv1.weight" in state_dict:
+        input_dim = state_dict["resblock1.conv1.weight"].shape[1]
+        cnn_hidden = state_dict["resblock1.conv1.weight"].shape[0]
+        lstm_hidden = state_dict["lstm.weight_ih_l0"].shape[0] // 4
+        n_lstm = sum(1 for k in state_dict if k.startswith("lstm.weight_ih_l"))
+        model = model_cls(
+            input_dim=input_dim,
+            num_classes=num_classes,
+            cnn_hidden_dim=cnn_hidden,
+            lstm_hidden_dim=lstm_hidden,
+            num_lstm_layers=n_lstm,
+        ).to(device)
+    else:
+        model = model_cls(input_dim=input_dim, num_classes=num_classes).to(device)
     model.load_state_dict(state_dict, strict=False)
     model.eval()
     return model
