@@ -460,8 +460,16 @@ async def process_queues(left_queue, right_queue):
             opp_idx = opp_win.timestamp_matched(timestamp=timestamp)
             if opp_idx is not None:
                 opp_chunk = np.stack(opp_win.pop_chunk(opp_idx + 1))
+            elif len(opp_win.data) > 0:
+                # No timestamp match: use most recent opp data (avoids zeros -> model collapse to 'm')
+                n_use = min(len(opp_win.data), chunk.shape[0])
+                opp_chunk = np.stack(opp_win.pop_chunk(n_use))
+                if opp_chunk.shape[0] < chunk.shape[0]:
+                    pad = np.zeros((chunk.shape[0] - opp_chunk.shape[0], opp_chunk.shape[1]), dtype=opp_chunk.dtype)
+                    opp_chunk = np.vstack([opp_chunk, pad])
             else:
                 opp_chunk = np.zeros_like(chunk)
+                # Zeros for one hand causes model to predict 'm'; ensure both hands are connected
             if triggered_hand == "left":
                 events.append({"left": chunk, "right": opp_chunk})
             else:
@@ -475,6 +483,7 @@ async def main():
     if SIMPLE_MODEL_ENABLED:
         print(f"Simple model mode: {SIMPLE_MODEL_TYPE} (will load from {SIMPLE_MODEL_PATH} on first inference)", file=sys.stderr)
     print("Waiting for GIK to appear...", file=sys.stderr)
+    print("  (Connect BOTH hands - one hand only causes zeros input -> model predicts 'm')", file=sys.stderr)
 
     data_queue_left = asyncio.Queue(MAX_QUEUE_SIZE)
     data_queue_right = asyncio.Queue(MAX_QUEUE_SIZE)

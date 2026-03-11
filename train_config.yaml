@@ -1,11 +1,11 @@
 data:
-  data_dir: data_hazel_7
+  data_dir: data_jun_4
   keyboard_files:
-    - "Keyboard_20.csv"
+    - "Keyboard_53.csv"
   left_files:
-    - "Left_20.csv"
+    - "Left_53.csv"
   right_files:
-    - "Right_14.csv"
+    - "Right_53.csv"
 
 experiment:
   mode: "classification"  # "coordinate" or "classification"
@@ -28,8 +28,8 @@ experiment:
       train_ratio: 0.8
       use_fsr: false
   use_augmentation: true
-  run_preprocess: true
-  export_dataset_csv: true
+  run_preprocess: false
+  export_dataset_csv: false
 
 model:
   model_type: "lstm"
@@ -70,7 +70,7 @@ train:
   weight_decay: 2.694617753114531e-06
   epochs: 300
   early_stopping: 20
-  model_save_path: "gik_model.pt"  # used by train + inference_receiver
+  model_save_path: "models_trained/gik_model_OP.pt"  # used by train + inference_receiver
 
 modes:
   classification:
