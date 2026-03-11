@@ -41,7 +41,16 @@ def build_lm_from_data(data_path, train_ratio=0.7, lm_order=4, lm_use_interpolat
         add_prev_char=True,
     )
     n_train = int(len(dataset) * train_ratio)
-    train_chars = [dataset._labels[i] for i in range(n_train)]
+    char_to_idx = getattr(dataset, "_char_to_index", CHAR_TO_INDEX)
+    train_chars = []
+    for i in range(n_train):
+        c = dataset._labels[i]
+        if c in char_to_idx:
+            sym = INDEX_TO_CHAR.get(char_to_idx[c])
+            if sym is not None:
+                train_chars.append(sym)
+    if not train_chars:
+        train_chars = [dataset._labels[i] for i in range(n_train)]  # fallback for non-grouped vocab
     if lm_use_interpolated and lm_order > 1:
         lm = build_interpolated_char_lm(train_chars, max_order=lm_order, add_k=lm_add_k)
     else:

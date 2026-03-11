@@ -61,8 +61,8 @@ train:
   lm_tta_passes: 1
   lm_tta_noise_std: 0.01
   lm_tta_scale_jitter: 0.1
-  sequence_lm_beta: 0.5       # Bayesian LM fusion during training
-  sequence_aux_weight: 0.7    # weight of fused_logits aux loss
+  sequence_lm_beta: 0.3       # Bayesian LM fusion during training
+  sequence_aux_weight: 0.2    # weight of fused_logits aux loss
   use_prev_from_labels: true  # use _prev_labels for LM (no append_prev_char)
   reverse_time_aug_prob: 0.3
   batch_size: 32

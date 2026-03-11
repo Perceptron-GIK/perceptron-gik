@@ -6,20 +6,47 @@ LETTER_CHARS = "abcdefghijklmnopqrstuvwxyz"
 DIGIT_CHARS = "0123456789"
 SPECIAL_CHARS = (" ", "\n", "\b", "\t")
 
-CHAR_TO_INDEX: Dict[str, int] = {}
-_idx = 0
-for c in LETTER_CHARS:
-    CHAR_TO_INDEX[c] = _idx
-    _idx += 1
-# for c in DIGIT_CHARS:
+# CHAR_TO_INDEX: Dict[str, int] = {}
+# _idx = 0
+# for c in LETTER_CHARS:
 #     CHAR_TO_INDEX[c] = _idx
 #     _idx += 1
-for c in SPECIAL_CHARS:
-    CHAR_TO_INDEX[c] = _idx
-    _idx += 1
+# # for c in DIGIT_CHARS:
+# #     CHAR_TO_INDEX[c] = _idx
+# #     _idx += 1
+# for c in SPECIAL_CHARS:
+#     CHAR_TO_INDEX[c] = _idx
+#     _idx += 1
 
-INDEX_TO_CHAR = {v: k for k, v in CHAR_TO_INDEX.items()}
-NUM_CLASSES = len(CHAR_TO_INDEX)
+CHAR_TO_INDEX = {
+    'q': 0, 'a': 0, 'z': 0,
+    'w': 1, 's': 1, 'x': 1,
+    'e': 2, 'd': 2, 'c': 2,
+    'r': 3, 'f': 3, 'v': 3,
+    't': 4, 'g': 4, 'b': 4,
+    'y': 5, 'h': 5, 'n': 5,
+    'u': 6, 'j': 6, 'm': 6,
+    'i': 7, 'k': 7,
+    'o': 8, 'l': 8,
+    'p': 9,
+    ' ': 0,  # sentinel for "no previous char" in inference
+}
+
+# INDEX_TO_CHAR = {v: k for k, v in CHAR_TO_INDEX.items()}
+INDEX_TO_CHAR = {
+    0: "qaz",
+    1: "wsx",
+    2: "edc",
+    3: "rfv",
+    4: "tgb",
+    5: "yhn",
+    6: "ujm",
+    7: "ik",
+    8: "ol",
+    9: "p"
+}
+# NUM_CLASSES = len(CHAR_TO_INDEX)
+NUM_CLASSES = 10
 
 SPECIAL_KEY_MAP = {
     "enter": "\n",

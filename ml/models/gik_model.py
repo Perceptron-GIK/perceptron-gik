@@ -456,11 +456,22 @@ class GIKTrainer:
         return torch.log(probs.to(self.device))
 
     def _build_char_lm(self, dataset: Dataset, train_idx: List[int]) -> Optional[Dict[str, Any]]:
-        """Build n-gram LM from train chars (same as simple models)."""
+        """Build n-gram LM from train chars. Converts single-char labels to class symbols (e.g. 'q'->'qaz') for 10-class grouping."""
         labels = getattr(dataset, "_labels", None)
-        if not isinstance(labels, list):
+        char_to_idx = getattr(dataset, "_char_to_index", None)
+        if not isinstance(labels, list) or not isinstance(char_to_idx, dict):
             return None
-        train_chars = [labels[i] for i in train_idx]
+        train_chars = []
+        for i in train_idx:
+            c = labels[i]
+            if c not in char_to_idx:
+                continue
+            idx = char_to_idx[c]
+            sym = INDEX_TO_CHAR.get(idx)
+            if sym is not None:
+                train_chars.append(sym)
+        if not train_chars:
+            return None
         if self.lm_use_interpolated and self.lm_order > 1:
             return build_interpolated_char_lm(
                 train_chars,
@@ -703,9 +714,18 @@ class GIKTrainer:
             beta_values = [0.0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 1.0]
         base_ds = self.train_dataset.dataset
         labels = getattr(base_ds, "_labels", None)
-        if not isinstance(labels, list):
+        char_to_idx = getattr(base_ds, "_char_to_index", None)
+        if not isinstance(labels, list) or not isinstance(char_to_idx, dict):
             return {"beta": 0.0, "val_acc": 0.0, "test_acc": 0.0}
-        train_chars = [labels[i] for i in self.train_dataset.indices]
+        train_chars = []
+        for i in self.train_dataset.indices:
+            c = labels[i]
+            if c in char_to_idx:
+                sym = INDEX_TO_CHAR.get(char_to_idx[c])
+                if sym is not None:
+                    train_chars.append(sym)
+        if not train_chars:
+            return {"beta": 0.0, "val_acc": 0.0, "test_acc": 0.0}
         if use_interpolated_lm and ngram_order > 1:
             lm = build_interpolated_char_lm(train_chars, max_order=ngram_order, add_k=add_k, order_weights=lm_order_weights)
         else:

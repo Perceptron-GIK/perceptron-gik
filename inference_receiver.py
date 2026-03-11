@@ -117,7 +117,7 @@ if LM_FUSION_ENABLED:
 _INFERENCE_LM: Optional[dict] = None
 _INFERENCE_MODEL: Optional[torch.nn.Module] = None
 
-MODEL_PATH = os.path.join(PROJECT_ROOT, TRAIN_CFG.get("model_save_path", "gik_model_OP_.pt"))
+MODEL_PATH = os.path.join(PROJECT_ROOT, TRAIN_CFG.get("model_save_path", "gik_model_OP_2.pt"))
 
 # MPS (Mac) produces different numerical results than CUDA; can cause model to collapse to one class.
 # Force CPU on Mac for consistent predictions (matches CUDA-trained model). Set GIK_USE_MPS=1 to use MPS.
@@ -234,10 +234,19 @@ def _get_inference_lm() -> Optional[dict]:
         labels = data.get("labels", [])
         if not isinstance(labels, list) or len(labels) == 0:
             return None
+        # Convert single-char labels to class symbols (e.g. 'q'->'qaz') for 10-class grouping
+        train_chars = []
+        for c in labels:
+            if c in CHAR_TO_INDEX:
+                sym = INDEX_TO_CHAR.get(CHAR_TO_INDEX[c])
+                if sym is not None:
+                    train_chars.append(sym)
+        if not train_chars:
+            return None
         if LM_USE_INTERPOLATED and LM_ORDER > 1:
-            _INFERENCE_LM = build_interpolated_char_lm(labels, max_order=LM_ORDER, add_k=LM_ADD_K)
+            _INFERENCE_LM = build_interpolated_char_lm(train_chars, max_order=LM_ORDER, add_k=LM_ADD_K)
         else:
-            _INFERENCE_LM = build_char_ngram_lm(labels, order=LM_ORDER, add_k=LM_ADD_K)
+            _INFERENCE_LM = build_char_ngram_lm(train_chars, order=LM_ORDER, add_k=LM_ADD_K)
         return _INFERENCE_LM
     except Exception as e:
         print(f"LM build failed: {e}, disabling LM fusion", file=sys.stderr)
