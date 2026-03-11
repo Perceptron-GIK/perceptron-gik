@@ -15,7 +15,7 @@ import os
 import numpy as np
 import pandas as pd
 from typing import Optional, Tuple, List, Dict, Any
-from src.Constants.char_to_key import CHAR_TO_INDEX, SPECIAL_KEY_MAP
+from src.Constants.char_to_key import CHAR_TO_INDEX, CHAR_TO_INDEX_4, SPECIAL_KEY_MAP
 
 NON_FEATURE_COLS = {'sample_id', 'time_stamp'}
 
@@ -124,8 +124,11 @@ class Preprocessing:
         filter_func: Optional[callable] = None,
         context_prev_windows: int = 0,
         context_future_windows: int = 0,
+        char_to_index: Optional[Dict[str, int]] = None,
     ) -> Tuple[List[np.ndarray], List[str], List[str], Dict[str, Any]]:
-        """Returns (samples, labels, prev_labels, metadata). labels and prev_labels are characters (str). prev_labels use '' for no previous."""
+        """Returns (samples, labels, prev_labels, metadata). labels and prev_labels are characters (str). prev_labels use '' for no previous.
+        char_to_index: optional mapping (default CHAR_TO_INDEX). Use CHAR_TO_INDEX_4 for 4-class row-based mapping."""
+        vocab = char_to_index if char_to_index is not None else CHAR_TO_INDEX
         context_prev_windows = max(0, int(context_prev_windows))
         context_future_windows = max(0, int(context_future_windows))
         samples, labels, prev_labels = [], [], []
@@ -161,7 +164,7 @@ class Preprocessing:
             context_start_t = key_events.iloc[start_evt_idx]['time']
             context_end_t = key_events.iloc[end_evt_idx]['time']
             next_char = self._char_from_key(key_events.iloc[i + 1]['name'])
-            if next_char is None or next_char not in CHAR_TO_INDEX:
+            if next_char is None or next_char not in vocab:
                 key = '<nan>' if next_char is None else next_char
                 skipped_chars[key] = skipped_chars.get(key, 0) + 1
                 continue

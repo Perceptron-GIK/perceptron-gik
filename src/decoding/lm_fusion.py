@@ -5,7 +5,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import torch
 import torch.nn.functional as F
 
-from src.Constants.char_to_key import INDEX_TO_CHAR, NUM_CLASSES
+from src.Constants.char_to_key import INDEX_TO_CHAR, NUM_CLASSES, INDEX_TO_CHAR_4, NUM_CLASSES_4
 
 
 def _idx_to_char_map() -> Dict[int, str]:
@@ -16,14 +16,17 @@ def build_char_ngram_lm(
     sequence_chars: Sequence[str],
     order: int = 3,
     add_k: float = 0.1,
+    vocab: Optional[List[str]] = None,
 ) -> Dict[str, object]:
     """
     Build a character n-gram LM with additive smoothing.
     order=3 means trigram context length 2.
+    vocab: optional; if None, uses 10-col mapping (INDEX_TO_CHAR).
     """
     if order < 1:
         raise ValueError("order must be >= 1")
-    vocab = [_idx_to_char_map()[i] for i in range(NUM_CLASSES)]
+    if vocab is None:
+        vocab = [_idx_to_char_map()[i] for i in range(NUM_CLASSES)]
     vocab_set = set(vocab)
     ctx_len = max(0, order - 1)
 
@@ -80,16 +83,18 @@ def build_interpolated_char_lm(
     max_order: int = 5,
     add_k: float = 0.1,
     order_weights: Optional[Sequence[float]] = None,
+    vocab: Optional[List[str]] = None,
 ) -> Dict[str, object]:
     """
     Build an interpolated n-gram LM by combining orders [1..max_order].
     Final probability:
       p(ch|h) = sum_i w_i * p_i(ch|h_{order_i})
+    vocab: optional; if None, uses 10-col mapping.
     """
     if max_order < 1:
         raise ValueError("max_order must be >= 1")
     sub_lms = [
-        build_char_ngram_lm(sequence_chars, order=o, add_k=add_k)
+        build_char_ngram_lm(sequence_chars, order=o, add_k=add_k, vocab=vocab)
         for o in range(1, max_order + 1)
     ]
     if order_weights is None:
@@ -114,6 +119,21 @@ def build_interpolated_char_lm(
 
 
 def _lm_log_prob_dispatch(lm: Dict[str, object], history_chars: Sequence[str], next_char: str) -> float:
+    """Dispatch to n-gram, interpolated, or pretrained LM.
+    For pretrained LM with multi-char class (e.g. 'qaz'), use log-sum-exp over constituent chars."""
+    if lm.get("model") is not None:
+        from src.decoding.pretrained_char_lm import pretrained_lm_log_prob, VALID_CHARS
+        # Multi-char class (10-col, 4-class): use log-sum-exp over chars in class
+        if len(next_char) > 1:
+            lps = [pretrained_lm_log_prob(lm, history_chars, c) for c in next_char if c in VALID_CHARS]
+            if not lps:
+                return -float("inf")
+            # log(sum(exp(lp))) = logsumexp
+            max_lp = max(lps)
+            if max_lp == -float("inf"):
+                return max_lp
+            return max_lp + math.log(sum(math.exp(lp - max_lp) for lp in lps))
+        return pretrained_lm_log_prob(lm, history_chars, next_char)
     lm_type = lm.get("type", "ngram")
     if lm_type != "interpolated":
         return _lm_log_prob(lm, history_chars, next_char)
@@ -133,11 +153,12 @@ def fuse_single_step_logits_with_lm(
     lm: Dict[str, object],
     history_chars: Sequence[str],
     beta: float,
+    idx_to_char: Optional[Dict[int, str]] = None,
 ) -> torch.Tensor:
     """Bayesian fusion (matches training): log posterior = log_softmax(logits) + beta * lm_log_probs."""
     if beta <= 0.0:
         return logits
-    idx_to_char = _idx_to_char_map()
+    idx_to_char = idx_to_char if idx_to_char is not None else _idx_to_char_map()
     lm_lp = torch.zeros_like(logits, dtype=logits.dtype)
     for i in range(logits.shape[-1]):
         ch = idx_to_char.get(i, "")
@@ -311,6 +332,7 @@ def beam_decode_with_lm(
     alpha_model: float = 1.0,
     beta_lm: float = 0.4,
     beam_width: int = 16,
+    idx_to_char: Optional[Dict[int, str]] = None,
 ) -> torch.Tensor:
     """
     Decode most likely class sequence under model+LM scores:
@@ -319,10 +341,8 @@ def beam_decode_with_lm(
     if logits.ndim != 2:
         raise ValueError("logits must be [N, C]")
     n_steps, n_classes = logits.shape
-    if n_classes != NUM_CLASSES:
-        raise ValueError(f"logits classes {n_classes} != NUM_CLASSES {NUM_CLASSES}")
-
-    idx_to_char = _idx_to_char_map()
+    if idx_to_char is None:
+        idx_to_char = INDEX_TO_CHAR_4 if n_classes == NUM_CLASSES_4 else _idx_to_char_map()
     log_probs = F.log_softmax(logits, dim=-1)
 
     # (score, seq_idx_list, seq_char_list)
@@ -332,7 +352,7 @@ def beam_decode_with_lm(
         lp_t = log_probs[t]
 
         # prune candidate next classes per beam step for speed
-        topk = min(10, NUM_CLASSES)
+        topk = min(10, n_classes)
         top_vals, top_idx = torch.topk(lp_t, k=topk)
         next_options = list(zip(top_idx.tolist(), top_vals.tolist()))
 
@@ -363,6 +383,7 @@ def tune_beta_on_validation(
     beta_values: Iterable[float] = (0.0, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 1.0),
     alpha_model: float = 1.0,
     beam_width: int = 16,
+    idx_to_char: Optional[Dict[int, str]] = None,
 ) -> Tuple[float, float]:
     best_beta = 0.0
     best_acc = -1.0
@@ -373,6 +394,7 @@ def tune_beta_on_validation(
             alpha_model=alpha_model,
             beta_lm=float(beta),
             beam_width=beam_width,
+            idx_to_char=idx_to_char,
         )
         acc = sequence_accuracy(pred, val_true_idx)
         if acc > best_acc:

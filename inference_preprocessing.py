@@ -17,7 +17,11 @@ from typing import Optional, Any
 from src.imu.main import IMUTracker
 from src.inference.align import AlignData
 from src.pre_processing.reduce_dim import reduce_dim
-from src.Constants.char_to_key import NUM_CLASSES, CHAR_TO_INDEX, INDEX_TO_CHAR, FULL_COORDS
+from src.Constants.char_to_key import (
+    NUM_CLASSES, CHAR_TO_INDEX, INDEX_TO_CHAR, FULL_COORDS,
+    NUM_CLASSES_4, CHAR_TO_INDEX_4, INDEX_TO_CHAR_4, FULL_COORDS_4,
+    NUM_CLASSES_DIAGONAL, CHAR_TO_INDEX_DIAGONAL, INDEX_TO_CHAR_DIAGONAL, FULL_COORDS_DIAGONAL,
+)
 
 IMU_SAMPLING_RATE = 28.57
 IMU_COLS = [0, 6, 13, 20, 27, 34]
@@ -70,30 +74,32 @@ def filter_imu_data(data: np.ndarray, part) -> np.ndarray:
 
     return filtered_data
 
-def add_prev_char(data, prev_char, mode):
+def add_prev_char(data, prev_char, mode, num_classes=None, char_to_index=None, index_to_char=None, full_coords=None):
     '''
     Adds the previous character prediction to the current window of data
 
     Args:
         data: 3D PyTorch tensor containing a single window of preprocessed data
         prev_char: Index of the previous character prediction
-        mode: "classification" or "regression"
-
-    Returns:
-        Data with prev_char added as a feature
+        mode: "classification", "classification_4", "classification_diagonal", or "regression"
+        num_classes, char_to_index, index_to_char, full_coords: optional overrides for 4-class mode
     '''
+    n_classes = num_classes or NUM_CLASSES
+    c2i = char_to_index or CHAR_TO_INDEX
+    i2c = index_to_char or INDEX_TO_CHAR
+    coords = full_coords or FULL_COORDS
     nRows = data.shape[1]
     if prev_char is None:
-        if mode == "classification":
-            space = F.one_hot(torch.tensor([CHAR_TO_INDEX[" "]]), num_classes=NUM_CLASSES).float().unsqueeze(1).repeat(1, nRows, 1)
+        if mode in ("classification", "classification_4", "classification_diagonal"):
+            space = F.one_hot(torch.tensor([c2i[" "]]), num_classes=n_classes).float().unsqueeze(1).repeat(1, nRows, 1)
         else:
-            space = torch.tensor([FULL_COORDS[" "]]).float().unsqueeze(1).repeat(1, nRows, 1)
+            space = torch.tensor([coords[" "]]).float().unsqueeze(1).repeat(1, nRows, 1)
         return torch.cat((data, space), dim=2)
     else:
-        if mode == "classification":
-            prev_char = F.one_hot(torch.tensor([prev_char]), num_classes=NUM_CLASSES).float().unsqueeze(1).repeat(1, nRows, 1)
+        if mode in ("classification", "classification_4", "classification_diagonal"):
+            prev_char = F.one_hot(torch.tensor([prev_char]), num_classes=n_classes).float().unsqueeze(1).repeat(1, nRows, 1)
         else:
-            prev_char = torch.tensor([FULL_COORDS[INDEX_TO_CHAR[prev_char]]]).float().unsqueeze(1).repeat(1, nRows, 1)
+            prev_char = torch.tensor([coords[i2c[prev_char]]]).float().unsqueeze(1).repeat(1, nRows, 1)
         return torch.cat((data, prev_char), dim=2)
 
 def preprocess(
@@ -213,6 +219,20 @@ def preprocess(
             dims_ratio=dims_ratio,
             root_dir=root_dir
         )
-        return add_prev_char(output, prev_char, mode) if append_prev_char else output
+        if append_prev_char:
+            kwargs = {}
+            if mode == "classification_4":
+                kwargs = dict(num_classes=NUM_CLASSES_4, char_to_index=CHAR_TO_INDEX_4, index_to_char=INDEX_TO_CHAR_4, full_coords=FULL_COORDS_4)
+            elif mode == "classification_diagonal":
+                kwargs = dict(num_classes=NUM_CLASSES_DIAGONAL, char_to_index=CHAR_TO_INDEX_DIAGONAL, index_to_char=INDEX_TO_CHAR_DIAGONAL, full_coords=FULL_COORDS_DIAGONAL)
+            return add_prev_char(output, prev_char, mode, **kwargs)
+        return output
     else:
-        return add_prev_char(samples, prev_char, mode) if append_prev_char else samples
+        if append_prev_char:
+            kwargs = {}
+            if mode == "classification_4":
+                kwargs = dict(num_classes=NUM_CLASSES_4, char_to_index=CHAR_TO_INDEX_4, index_to_char=INDEX_TO_CHAR_4, full_coords=FULL_COORDS_4)
+            elif mode == "classification_diagonal":
+                kwargs = dict(num_classes=NUM_CLASSES_DIAGONAL, char_to_index=CHAR_TO_INDEX_DIAGONAL, index_to_char=INDEX_TO_CHAR_DIAGONAL, full_coords=FULL_COORDS_DIAGONAL)
+            return add_prev_char(samples, prev_char, mode, **kwargs)
+        return samples

@@ -48,6 +48,85 @@ INDEX_TO_CHAR = {
 # NUM_CLASSES = len(CHAR_TO_INDEX)
 NUM_CLASSES = 10
 
+# --- Full char mapping: letters + special chars (no digits) ---
+# One class per character: a-z (26) + space, newline, tab, backspace (4) = 30
+CHAR_TO_INDEX_CHARS: Dict[str, int] = {}
+for i, c in enumerate("abcdefghijklmnopqrstuvwxyz"):
+    CHAR_TO_INDEX_CHARS[c] = i
+CHAR_TO_INDEX_CHARS[" "] = 26
+CHAR_TO_INDEX_CHARS["\n"] = 27
+CHAR_TO_INDEX_CHARS["\t"] = 28
+CHAR_TO_INDEX_CHARS["\b"] = 29
+
+INDEX_TO_CHAR_CHARS = {v: k for k, v in CHAR_TO_INDEX_CHARS.items()}
+NUM_CLASSES_CHARS = len(CHAR_TO_INDEX_CHARS)
+
+ALL_CHARS_FULL = list(INDEX_TO_CHAR_CHARS[i] for i in range(NUM_CLASSES_CHARS))
+
+# --- 4-class row-based mapping (optional) ---
+# 0: top row (qwertyuiop), 1: home row (asdfghjkl), 2: bottom row (zxcvbnm), 3: space
+CHAR_TO_INDEX_4: Dict[str, int] = {}
+for c in "qwertyuiop":
+    CHAR_TO_INDEX_4[c] = 0
+for c in "asdfghjkl":
+    CHAR_TO_INDEX_4[c] = 1
+for c in "zxcvbnm":
+    CHAR_TO_INDEX_4[c] = 2
+CHAR_TO_INDEX_4[" "] = 3
+CHAR_TO_INDEX_4["\n"] = 3  # enter/space-like sentinel
+
+INDEX_TO_CHAR_4 = {
+    0: "qwertyuiop",
+    1: "asdfghjkl",
+    2: "zxcvbnm",
+    3: " ",
+}
+NUM_CLASSES_4 = 4
+
+ALL_CHARS_4 = [INDEX_TO_CHAR_4[i] for i in range(NUM_CLASSES_4)]
+
+# --- 10-class diagonal mapping (top-left to bottom-right diagonals on QWERTY) ---
+# Diag 0: q | Diag 1: wa | Diag 2: esz | Diag 3: rdx | Diag 4: tfc | Diag 5: ygv | Diag 6: uhb | Diag 7: ijn | Diag 8: okm | Diag 9: pl
+CHAR_TO_INDEX_DIAGONAL: Dict[str, int] = {}
+for c in "q":
+    CHAR_TO_INDEX_DIAGONAL[c] = 0
+for c in "wa":
+    CHAR_TO_INDEX_DIAGONAL[c] = 1
+for c in "esz":
+    CHAR_TO_INDEX_DIAGONAL[c] = 2
+for c in "rdx":
+    CHAR_TO_INDEX_DIAGONAL[c] = 3
+for c in "tfc":
+    CHAR_TO_INDEX_DIAGONAL[c] = 4
+for c in "ygv":
+    CHAR_TO_INDEX_DIAGONAL[c] = 5
+for c in "uhb":
+    CHAR_TO_INDEX_DIAGONAL[c] = 6
+for c in "ijn":
+    CHAR_TO_INDEX_DIAGONAL[c] = 7
+for c in "okm":
+    CHAR_TO_INDEX_DIAGONAL[c] = 8
+for c in "pl":
+    CHAR_TO_INDEX_DIAGONAL[c] = 9
+CHAR_TO_INDEX_DIAGONAL[" "] = 0  # sentinel for "no previous char"
+CHAR_TO_INDEX_DIAGONAL["\n"] = 0
+
+INDEX_TO_CHAR_DIAGONAL = {
+    0: "q",
+    1: "wa",
+    2: "esz",
+    3: "rdx",
+    4: "tfc",
+    5: "ygv",
+    6: "uhb",
+    7: "ijn",
+    8: "okm",
+    9: "pl",
+}
+NUM_CLASSES_DIAGONAL = 10
+
+ALL_CHARS_DIAGONAL = [INDEX_TO_CHAR_DIAGONAL[i] for i in range(NUM_CLASSES_DIAGONAL)]
+
 SPECIAL_KEY_MAP = {
     "enter": "\n",
     "space": " ",
@@ -97,6 +176,49 @@ for _ch in ALL_CHARS:
     else:
         # Fallback for any unexpected character.
         FULL_COORDS[_ch] = (5.3, 4.0)
+
+FULL_COORDS_4: Dict[str, Tuple[float, float]] = {}
+for _ch in ALL_CHARS_4:
+    if _ch in KEY_COORDS:
+        FULL_COORDS_4[_ch] = KEY_COORDS[_ch]
+    elif _ch in SPECIAL_COORDS:
+        FULL_COORDS_4[_ch] = SPECIAL_COORDS[_ch]
+    elif _ch == " ":
+        FULL_COORDS_4[_ch] = (5.3, 4.0)
+    else:
+        FULL_COORDS_4[_ch] = (5.3, 4.0)
+
+# Coords for full-char mode (letters + space; \n \t \b use space position)
+FULL_COORDS_CHARS: Dict[str, Tuple[float, float]] = {}
+for _ch in ALL_CHARS_FULL:
+    if _ch in KEY_COORDS:
+        FULL_COORDS_CHARS[_ch] = KEY_COORDS[_ch]
+    elif _ch in SPECIAL_COORDS:
+        FULL_COORDS_CHARS[_ch] = SPECIAL_COORDS[_ch]
+    elif _ch == " ":
+        FULL_COORDS_CHARS[_ch] = (5.3, 4.0)
+    else:
+        FULL_COORDS_CHARS[_ch] = (5.3, 4.0)
+
+FULL_COORDS_DIAGONAL: Dict[str, Tuple[float, float]] = {}
+for _ch in ALL_CHARS_DIAGONAL:
+    if _ch in KEY_COORDS:
+        FULL_COORDS_DIAGONAL[_ch] = KEY_COORDS[_ch]
+    elif _ch in SPECIAL_COORDS:
+        FULL_COORDS_DIAGONAL[_ch] = SPECIAL_COORDS[_ch]
+    elif _ch == " ":
+        FULL_COORDS_DIAGONAL[_ch] = (5.3, 4.0)
+    elif len(_ch) == 1:
+        FULL_COORDS_DIAGONAL[_ch] = KEY_COORDS.get(_ch, (5.3, 4.0))
+    else:
+        # Centroid of constituent keys for multi-char diagonal (e.g. "wa", "esz")
+        pts = [KEY_COORDS[c] for c in _ch if c in KEY_COORDS]
+        if pts:
+            cx = sum(p[0] for p in pts) / len(pts)
+            cy = sum(p[1] for p in pts) / len(pts)
+            FULL_COORDS_DIAGONAL[_ch] = (cx, cy)
+        else:
+            FULL_COORDS_DIAGONAL[_ch] = (5.3, 4.0)
 
 INITIAL_KEY_COORDS: Dict[str, Tuple[float, float, float]] = { # initial guess for imu position, with z=0.0 for all keys
     'base_L': (0.0, 0.0, 0.0),

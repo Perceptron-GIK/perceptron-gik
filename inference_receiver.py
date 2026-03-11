@@ -3,7 +3,11 @@ import numpy as np
 from typing import Callable, Any, Optional, Dict, List
 from bleak import BleakScanner, BleakClient
 
-from src.Constants.char_to_key import NUM_CLASSES, INDEX_TO_CHAR, CHAR_TO_INDEX, FULL_COORDS
+from src.Constants.char_to_key import (
+    NUM_CLASSES, INDEX_TO_CHAR, CHAR_TO_INDEX, FULL_COORDS,
+    NUM_CLASSES_4, INDEX_TO_CHAR_4, CHAR_TO_INDEX_4, FULL_COORDS_4,
+    NUM_CLASSES_DIAGONAL, INDEX_TO_CHAR_DIAGONAL, CHAR_TO_INDEX_DIAGONAL, FULL_COORDS_DIAGONAL,
+)
 from src.inference.sliding_window import SlidingWindow
 from src.inference.autocorrect import AutoCorrector
 from src.visualisation.visualisation import get_closest_coordinate
@@ -64,7 +68,7 @@ EXPERIMENT_MODE = EXPERIMENT["mode"]
 MODE_CONFIG = config_data["modes"][EXPERIMENT_MODE]
 
 # Resolve output_logits from mode config (e.g. "NUM_CLASSES" -> actual value)
-OUTPUT_LOGITS_REGISTRY = {"NUM_CLASSES": NUM_CLASSES}
+OUTPUT_LOGITS_REGISTRY = {"NUM_CLASSES": NUM_CLASSES, "NUM_CLASSES_4": NUM_CLASSES_4, "NUM_CLASSES_DIAGONAL": NUM_CLASSES_DIAGONAL}
 _output_logits = MODE_CONFIG.get("output_logits", "NUM_CLASSES")
 if isinstance(_output_logits, str):
     _output_logits = OUTPUT_LOGITS_REGISTRY.get(_output_logits, NUM_CLASSES)
@@ -74,6 +78,17 @@ TRAINING_CONFIG = {
     **MODE_CONFIG,
     "output_logits": _output_logits,
 }
+
+# Active char mapping for inference (4-class vs 10-class column vs 10-class diagonal)
+if EXPERIMENT_MODE == "classification_4":
+    INDEX_TO_CHAR_ACTIVE, CHAR_TO_INDEX_ACTIVE = INDEX_TO_CHAR_4, CHAR_TO_INDEX_4
+    FULL_COORDS_ACTIVE = FULL_COORDS_4
+elif EXPERIMENT_MODE == "classification_diagonal":
+    INDEX_TO_CHAR_ACTIVE, CHAR_TO_INDEX_ACTIVE = INDEX_TO_CHAR_DIAGONAL, CHAR_TO_INDEX_DIAGONAL
+    FULL_COORDS_ACTIVE = FULL_COORDS_DIAGONAL
+else:
+    INDEX_TO_CHAR_ACTIVE, CHAR_TO_INDEX_ACTIVE = INDEX_TO_CHAR, CHAR_TO_INDEX
+    FULL_COORDS_ACTIVE = FULL_COORDS
 
 # Inference config derived from experiment (must match training preprocessing)
 DIM_RED_CFG = EXPERIMENT.get("dim_reduction", {})
@@ -101,7 +116,7 @@ SIMPLE_MODEL_PATH = os.path.join(PROJECT_ROOT, SIMPLE_MODEL_CFG.get("path", "mod
 SIMPLE_MODEL_TYPE = SIMPLE_MODEL_CFG.get("type", "cnn")
 
 # LM fusion for real-time inference (classification only)
-LM_FUSION_ENABLED = EXPERIMENT_MODE == "classification" and TRAIN_CFG.get("lm_fusion_inference", False)
+LM_FUSION_ENABLED = EXPERIMENT_MODE in ("classification", "classification_4", "classification_diagonal") and TRAIN_CFG.get("lm_fusion_inference", False)
 LM_INFERENCE_BETA = float(TRAIN_CFG.get("lm_inference_beta", 0.4))
 LM_ORDER = int(TRAIN_CFG.get("lm_order", 3))
 LM_HISTORY_LEN = max(0, LM_ORDER - 1)
@@ -237,8 +252,8 @@ def _get_inference_lm() -> Optional[dict]:
         # Convert single-char labels to class symbols (e.g. 'q'->'qaz') for 10-class grouping
         train_chars = []
         for c in labels:
-            if c in CHAR_TO_INDEX:
-                sym = INDEX_TO_CHAR.get(CHAR_TO_INDEX[c])
+            if c in CHAR_TO_INDEX_ACTIVE:
+                sym = INDEX_TO_CHAR_ACTIVE.get(CHAR_TO_INDEX_ACTIVE[c])
                 if sym is not None:
                     train_chars.append(sym)
         if not train_chars:
@@ -361,7 +376,7 @@ def run_inference(
     x = processed_data if torch.is_tensor(processed_data) else torch.tensor(processed_data, dtype=torch.float32)
 
     with torch.no_grad():
-        if EXPERIMENT_MODE == "classification":
+        if EXPERIMENT_MODE in ("classification", "classification_4", "classification_diagonal"):
             if SIMPLE_MODEL_ENABLED:
                 logits = model(x.to(DEVICE)).squeeze(0).cpu()
             elif TTA_PASSES > 1 or TTA_NOISE_STD > 0.0 or TTA_SCALE_JITTER > 0.0:
@@ -376,12 +391,12 @@ def run_inference(
             lm = _get_inference_lm()
             if lm is not None and LM_INFERENCE_BETA > 0.0:
                 history = list(history_chars)[-LM_HISTORY_LEN:] if history_chars else []
-                logits = fuse_single_step_logits_with_lm(logits, lm, history, LM_INFERENCE_BETA)
+                logits = fuse_single_step_logits_with_lm(logits, lm, history, LM_INFERENCE_BETA, idx_to_char=INDEX_TO_CHAR_ACTIVE)
             predicted_idx = logits.argmax(dim=-1).item()
         else:
-            predicted_idx = CHAR_TO_INDEX[get_closest_coordinate(model.predict_coords(x.to(DEVICE)), FULL_COORDS)]
+            predicted_idx = CHAR_TO_INDEX_ACTIVE[get_closest_coordinate(model.predict_coords(x.to(DEVICE)), FULL_COORDS_ACTIVE)]
 
-    predicted_char = INDEX_TO_CHAR[predicted_idx]
+    predicted_char = INDEX_TO_CHAR_ACTIVE[predicted_idx]
     inference_predictions += predicted_char
     print(predicted_char, end="", flush=True)  # stdout: predictions only
     return predicted_idx
@@ -424,7 +439,7 @@ async def process_queues(left_queue, right_queue):
             decoded_abs_idx += 1
 
             if prev_char is not None and LM_HISTORY_LEN > 0:
-                history_chars.append(INDEX_TO_CHAR[prev_char])
+                history_chars.append(INDEX_TO_CHAR_ACTIVE[prev_char])
                 if len(history_chars) > LM_HISTORY_LEN:
                     history_chars.pop(0)
 

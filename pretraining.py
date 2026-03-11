@@ -38,7 +38,7 @@ import json
 # Import custom modules
 from src.imu.main import IMUTracker
 from src.pre_processing.alignment import Preprocessing
-from src.Constants.char_to_key import CHAR_TO_INDEX
+from src.Constants.char_to_key import CHAR_TO_INDEX, CHAR_TO_INDEX_4
 
 
 IMU_SAMPLING_RATE = 28.57
@@ -105,6 +105,7 @@ def preprocess_multiple_sources(
     apply_filtering: bool = True,
     alignment_prev_windows: int = 0,
     alignment_future_windows: int = 0,
+    char_to_index: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     """
     Preprocess data from multiple source files and combine them.
@@ -162,6 +163,7 @@ def preprocess_multiple_sources(
             filter_func=filter_imu_data if apply_filtering else None,
             context_prev_windows=alignment_prev_windows,
             context_future_windows=alignment_future_windows,
+            char_to_index=char_to_index,
         )
 
         all_samples.extend(samples)

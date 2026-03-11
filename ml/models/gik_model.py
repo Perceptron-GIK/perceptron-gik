@@ -25,7 +25,12 @@ from .default_models import (
     TransformerModel, AttentionLSTM, LSTMModel, GRUModel, RNNModel, CNNModel,
     CNNSTRNet,
 )
-from src.Constants.char_to_key import INDEX_TO_CHAR, NUM_CLASSES
+from src.Constants.char_to_key import (
+    INDEX_TO_CHAR, NUM_CLASSES,
+    INDEX_TO_CHAR_4, CHAR_TO_INDEX_4,
+    INDEX_TO_CHAR_DIAGONAL, CHAR_TO_INDEX_DIAGONAL,
+    INDEX_TO_CHAR_CHARS, CHAR_TO_INDEX_CHARS,
+)
 from src.pre_processing.augmentation import GIKAugmentationsPerFeature, AugmentedDataset
 from src.visualisation.visualisation import postprocess_coordinate_output, get_closest_coordinate
 from src.decoding.lm_fusion import (
@@ -259,6 +264,7 @@ class GIKTrainer:
         ema_decay: float = 0.999,
         sequence_lm_beta: float = 0.0,
         sequence_aux_weight: float = 0.5,
+        lm_use_pretrained: bool = False,
         lm_order: int = 3,
         lm_add_k: float = 0.05,
         lm_use_interpolated: bool = True,
@@ -268,6 +274,7 @@ class GIKTrainer:
         loss: callable = nn.CrossEntropyLoss,
         loss_kwargs: Optional[Dict] = None,
         regression: bool = False,
+        idx_to_char: Optional[Dict[int, str]] = None,
     ):
         """
         regression: If True, labels are continuous (e.g. 2D coords); loss(logits, batch_y) and accuracy uses L1.
@@ -390,6 +397,7 @@ class GIKTrainer:
         self.ema_decay = float(ema_decay)
         self.sequence_lm_beta = float(sequence_lm_beta)
         self.sequence_aux_weight = float(sequence_aux_weight)
+        self.lm_use_pretrained = bool(lm_use_pretrained)
         self.lm_order = int(lm_order)
         self.lm_add_k = float(lm_add_k)
         self.lm_use_interpolated = bool(lm_use_interpolated)
@@ -397,10 +405,25 @@ class GIKTrainer:
         self.use_prev_from_labels = bool(use_prev_from_labels)
         self.transition_log_probs: Optional[torch.Tensor] = None  # legacy bigram; kept for fallback
         self.char_lm: Optional[Dict[str, Any]] = None
-        self.idx_to_char: Dict[int, str] = {int(i): ch for i, ch in INDEX_TO_CHAR.items()}
+        if idx_to_char is not None:
+            self.idx_to_char = {int(i): ch for i, ch in idx_to_char.items()}
+        else:
+            char_to_idx = getattr(dataset, "_char_to_index", None)
+            if char_to_idx is CHAR_TO_INDEX_4 or (char_to_idx and char_to_idx.get(" ") == 3 and char_to_idx.get("a") == 1):
+                self.idx_to_char = {int(i): ch for i, ch in INDEX_TO_CHAR_4.items()}
+            elif char_to_idx is CHAR_TO_INDEX_DIAGONAL or (char_to_idx and char_to_idx.get("a") == char_to_idx.get("w") == 1):
+                self.idx_to_char = {int(i): ch for i, ch in INDEX_TO_CHAR_DIAGONAL.items()}
+            elif char_to_idx is CHAR_TO_INDEX_CHARS or (char_to_idx and char_to_idx.get("a") == 0 and char_to_idx.get(" ") == 26):
+                self.idx_to_char = {int(i): ch for i, ch in INDEX_TO_CHAR_CHARS.items()}
+            else:
+                self.idx_to_char = {int(i): ch for i, ch in INDEX_TO_CHAR.items()}
         self.transition_log_probs = self._build_transition_log_probs(dataset, train_idx)
         if self.sequence_lm_beta > 0.0 and not self.regression:
-            self.char_lm = self._build_char_lm(dataset, train_idx)
+            if self.lm_use_pretrained:
+                from src.decoding.pretrained_char_lm import load_pretrained_char_lm
+                self.char_lm = load_pretrained_char_lm(device=str(self.device))
+            else:
+                self.char_lm = self._build_char_lm(dataset, train_idx)
 
         train_ds_for_loader = self.train_dataset_aug
         val_ds_for_loader = self.val_dataset
@@ -467,22 +490,29 @@ class GIKTrainer:
             if c not in char_to_idx:
                 continue
             idx = char_to_idx[c]
-            sym = INDEX_TO_CHAR.get(idx)
+            sym = self.idx_to_char.get(idx)
             if sym is not None:
                 train_chars.append(sym)
         if not train_chars:
             return None
+        # For classification_chars (letters+special, no digits), vocab is per-char
+        is_chars_mode = char_to_idx is CHAR_TO_INDEX_CHARS or (
+            char_to_idx and char_to_idx.get("a") == 0 and char_to_idx.get(" ") == 26
+        )
+        vocab = list(self.idx_to_char.values()) if is_chars_mode else None
         if self.lm_use_interpolated and self.lm_order > 1:
             return build_interpolated_char_lm(
                 train_chars,
                 max_order=self.lm_order,
                 add_k=self.lm_add_k,
                 order_weights=self.lm_order_weights,
+                vocab=vocab,
             )
         return build_char_ngram_lm(
             train_chars,
             order=self.lm_order,
             add_k=self.lm_add_k,
+            vocab=vocab,
         )
 
     def _extract_prev_idx_from_input(self, batch_x: torch.Tensor) -> Optional[torch.Tensor]:
@@ -698,6 +728,7 @@ class GIKTrainer:
     @torch.no_grad()
     def evaluate_with_lm_fusion(
         self,
+        use_pretrained_lm: bool = False,
         ngram_order: int = 2,
         use_interpolated_lm: bool = True,
         lm_order_weights: Optional[List[float]] = None,
@@ -712,24 +743,30 @@ class GIKTrainer:
             return {"beta": 0.0, "val_acc": 0.0, "test_acc": 0.0}
         if beta_values is None:
             beta_values = [0.0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 1.0]
-        base_ds = self.train_dataset.dataset
-        labels = getattr(base_ds, "_labels", None)
-        char_to_idx = getattr(base_ds, "_char_to_index", None)
-        if not isinstance(labels, list) or not isinstance(char_to_idx, dict):
-            return {"beta": 0.0, "val_acc": 0.0, "test_acc": 0.0}
-        train_chars = []
-        for i in self.train_dataset.indices:
-            c = labels[i]
-            if c in char_to_idx:
-                sym = INDEX_TO_CHAR.get(char_to_idx[c])
-                if sym is not None:
-                    train_chars.append(sym)
-        if not train_chars:
-            return {"beta": 0.0, "val_acc": 0.0, "test_acc": 0.0}
-        if use_interpolated_lm and ngram_order > 1:
-            lm = build_interpolated_char_lm(train_chars, max_order=ngram_order, add_k=add_k, order_weights=lm_order_weights)
+        if use_pretrained_lm or (self.char_lm is not None and self.char_lm.get("model") is not None):
+            lm = self.char_lm if (self.char_lm and self.char_lm.get("model") is not None) else None
+            if lm is None:
+                from src.decoding.pretrained_char_lm import load_pretrained_char_lm
+                lm = load_pretrained_char_lm(device=str(self.device))
         else:
-            lm = build_char_ngram_lm(train_chars, order=ngram_order, add_k=add_k)
+            base_ds = self.train_dataset.dataset
+            labels = getattr(base_ds, "_labels", None)
+            char_to_idx = getattr(base_ds, "_char_to_index", None)
+            if not isinstance(labels, list) or not isinstance(char_to_idx, dict):
+                return {"beta": 0.0, "val_acc": 0.0, "test_acc": 0.0}
+            train_chars = []
+            for i in self.train_dataset.indices:
+                c = labels[i]
+                if c in char_to_idx:
+                    sym = self.idx_to_char.get(char_to_idx[c])
+                    if sym is not None:
+                        train_chars.append(sym)
+            if not train_chars:
+                return {"beta": 0.0, "val_acc": 0.0, "test_acc": 0.0}
+            if use_interpolated_lm and ngram_order > 1:
+                lm = build_interpolated_char_lm(train_chars, max_order=ngram_order, add_k=add_k, order_weights=lm_order_weights)
+            else:
+                lm = build_char_ngram_lm(train_chars, order=ngram_order, add_k=add_k)
         model = self._eval_model()
         if tta_passes > 1:
             val_logits, val_true = collect_logits_and_labels_tta(
@@ -743,9 +780,9 @@ class GIKTrainer:
         else:
             val_logits, val_true = collect_logits_and_labels(self.val_dataset, model, str(self.device))
             test_logits, test_true = collect_logits_and_labels(self.test_dataset, model, str(self.device))
-        beta, _ = tune_beta_on_validation(val_logits, val_true, lm, beta_values, 1.0, beam_width)
-        val_pred = beam_decode_with_lm(val_logits, lm=lm, alpha_model=1.0, beta_lm=beta, beam_width=beam_width)
-        test_pred = beam_decode_with_lm(test_logits, lm=lm, alpha_model=1.0, beta_lm=beta, beam_width=beam_width)
+        beta, _ = tune_beta_on_validation(val_logits, val_true, lm, beta_values, 1.0, beam_width, idx_to_char=self.idx_to_char)
+        val_pred = beam_decode_with_lm(val_logits, lm=lm, alpha_model=1.0, beta_lm=beta, beam_width=beam_width, idx_to_char=self.idx_to_char)
+        test_pred = beam_decode_with_lm(test_logits, lm=lm, alpha_model=1.0, beta_lm=beta, beam_width=beam_width, idx_to_char=self.idx_to_char)
         return {
             "beta": float(beta),
             "val_acc": float(sequence_accuracy(val_pred, val_true)),

@@ -1,14 +1,14 @@
 data:
-  data_dir: data_hazel_7
+  data_dir: data_jun_4
   keyboard_files:
-    - "Keyboard_20.csv"
+    - "Keyboard_53.csv"
   left_files:
-    - "Left_20.csv"
+    - "Left_53.csv"
   right_files:
-    - "Right_14.csv"
+    - "Right_53.csv"
 
 experiment:
-  mode: "classification"  # "coordinate" or "classification"
+  mode: "classification_chars"  # "classification_10_col" | "classification_4" | "classification_diagonal" | "classification_chars" | "coordinate"
   alignment_context:
     prev_windows: 0
     future_windows: 2
@@ -28,8 +28,8 @@ experiment:
       train_ratio: 0.8
       use_fsr: false
   use_augmentation: true
-  run_preprocess: true
-  export_dataset_csv: true
+  run_preprocess: false
+  export_dataset_csv: false
 
 model:
   model_type: "lstm"
@@ -51,11 +51,12 @@ train:
   use_ema: false
   ema_decay: 0.998
   early_stopping_metric: "val_acc"
+  lm_use_pretrained: true    # use nanoGPT Shakespeare pretrained LM; false = build n-gram from train
   lm_order: 5
   lm_add_k: 0.05
   lm_beam_width: 25
   lm_beta_values: [0.0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 0.7, 0.9, 1.0]
-  lm_use_interpolated: true
+  lm_use_interpolated: true  # only when lm_use_pretrained=false
   lm_fusion_inference: true
   lm_inference_beta: 0.7
   lm_tta_passes: 1
@@ -73,11 +74,58 @@ train:
   model_save_path: "gik_model.pt"  # used by train + inference_receiver
 
 modes:
+  # 10-class column mapping (qaz, wsx, edc, ...)
+  classification_10_col:
+    use_class_weights: false
+    output_logits: "NUM_CLASSES"
+    is_one_hot: true
+    key_mapping_dict: CHAR_TO_INDEX
+    return_class_id: false
+    regression: false
+    loss: FocalLoss
+    loss_params:
+      gamma: 1.5
+
+  # Legacy alias
   classification:
     use_class_weights: false
     output_logits: "NUM_CLASSES"
     is_one_hot: true
     key_mapping_dict: CHAR_TO_INDEX
+    return_class_id: false
+    regression: false
+    loss: FocalLoss
+    loss_params:
+      gamma: 1.5
+
+  classification_4:
+    use_class_weights: false
+    output_logits: "NUM_CLASSES_4"
+    is_one_hot: true
+    key_mapping_dict: CHAR_TO_INDEX_4
+    return_class_id: false
+    regression: false
+    loss: FocalLoss
+    loss_params:
+      gamma: 1.5
+
+  classification_diagonal:
+    use_class_weights: false
+    output_logits: "NUM_CLASSES_DIAGONAL"
+    is_one_hot: true
+    key_mapping_dict: CHAR_TO_INDEX_DIAGONAL
+    return_class_id: false
+    regression: false
+    loss: FocalLoss
+    loss_params:
+      gamma: 1.5
+
+  # Full char mapping: letters + special chars (no digits), one class per character
+  classification_chars:
+    use_class_weights: false
+    output_logits: "NUM_CLASSES_CHARS"
+    is_one_hot: true
+    key_mapping_dict: CHAR_TO_INDEX_CHARS
     return_class_id: false
     regression: false
     loss: FocalLoss
