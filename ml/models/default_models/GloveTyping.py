@@ -188,6 +188,7 @@ class CNNSTRNet(nn.Module):
 
     def __init__(
         self,
+        input_dim: int,
         hidden_dim: int,
         num_res_blocks: int = 3,
         dropout: float = 0.2,
@@ -198,7 +199,7 @@ class CNNSTRNet(nn.Module):
 
         # Stage 1: CNN feature extraction (kernel=1 → pointwise across channels per timestep)
         self.cnn_feature = nn.Sequential(
-            nn.Conv1d(hidden_dim, hidden_dim, kernel_size=1, bias=False),
+            nn.Conv1d(input_dim, hidden_dim, kernel_size=1, bias=False),
             nn.BatchNorm1d(hidden_dim),
             nn.ReLU(),
         )

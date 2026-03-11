@@ -151,12 +151,12 @@ class GIKModelWrapper(nn.Module):
         self.pool_output = pool_output
         
         # Input projection layer
-        self.input_projection = nn.Sequential(
-            nn.Linear(input_dim, inner_model_dim),
-            nn.LayerNorm(inner_model_dim),
-            nn.ReLU(),
-            # nn.Dropout(dropout)
-        )
+        # self.input_projection = nn.Sequential(
+        #     nn.Linear(input_dim, inner_model_dim),
+        #     nn.LayerNorm(inner_model_dim),
+        #     nn.ReLU(),
+        #     # nn.Dropout(dropout)
+        # )
         
         # Inner model (user-provided)
         self.inner_model = inner_model
@@ -182,7 +182,7 @@ class GIKModelWrapper(nn.Module):
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass."""
-        x = self.input_projection(x)
+        # x = self.input_projection(x)
         x = self.inner_model(x)
         
         # If we have a channel dimension from CNN then pool it 
@@ -882,19 +882,19 @@ def create_model(
         raise ValueError("input_dim is required - get it from dataset.input_dim")
     
     if model_type == 'transformer':
-        inner_model = TransformerModel(hidden_dim_inner_model, **inner_model_kwargs)
+        inner_model = TransformerModel(input_dim, hidden_dim_inner_model, **inner_model_kwargs)
     elif model_type == 'attention_lstm':
-        inner_model = AttentionLSTM(hidden_dim_inner_model, **inner_model_kwargs)
+        inner_model = AttentionLSTM(input_dim, hidden_dim_inner_model, **inner_model_kwargs)
     elif model_type == 'lstm':
-        inner_model = LSTMModel(hidden_dim_inner_model, **inner_model_kwargs)
+        inner_model = LSTMModel(input_dim, hidden_dim_inner_model, **inner_model_kwargs)
     elif model_type == 'gru':
-        inner_model = GRUModel(hidden_dim_inner_model, **inner_model_kwargs)
+        inner_model = GRUModel(input_dim, hidden_dim_inner_model, **inner_model_kwargs)
     elif model_type == 'rnn':
-        inner_model = RNNModel(hidden_dim_inner_model, **inner_model_kwargs)
+        inner_model = RNNModel(input_dim, hidden_dim_inner_model, **inner_model_kwargs)
     elif model_type == 'cnn':
-        inner_model = CNNModel(hidden_dim_inner_model, **inner_model_kwargs)
+        inner_model = CNNModel(input_dim, hidden_dim_inner_model, **inner_model_kwargs)
     elif model_type == 'glove_typing':
-        inner_model = CNNSTRNet(hidden_dim_inner_model, **inner_model_kwargs)
+        inner_model = CNNSTRNet(input_dim, hidden_dim_inner_model, **inner_model_kwargs)
     else:
         raise ValueError(f"Unknown model type: {model_type}. Use: transformer, attention_lstm, lstm, gru, rnn, cnn, glove_typing")
     

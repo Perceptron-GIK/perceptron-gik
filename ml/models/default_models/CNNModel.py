@@ -1,12 +1,14 @@
 import torch
 from torch import nn
 from typing import List
+import torch.nn.functional as F
 
 class CNNModel(nn.Module):
     """1D CNN for sequence processing."""
     
     def __init__(
         self,
+        input_dim: int,
         hidden_dim: int,
         kernel_sizes: List[int] = None,
         dropout: float = 0.2
@@ -15,6 +17,7 @@ class CNNModel(nn.Module):
         if kernel_sizes is None:
             kernel_sizes = [3, 5, 7]
         
+        self.conv1 = nn.Conv1d(input_dim, hidden_dim, 3, padding=3//2)
         self.convs = nn.ModuleList([
             nn.Sequential(
                 nn.Conv1d(hidden_dim, hidden_dim, k, padding=k//2),
@@ -29,7 +32,7 @@ class CNNModel(nn.Module):
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x.transpose(1, 2)
-        
+        x = self.conv1(x)
         conv_outputs = []
         for conv in self.convs:
             c = conv(x)

@@ -6,6 +6,7 @@ class RNNModel(nn.Module):
 
     def __init__(
         self,
+        input_dim: int,
         hidden_dim: int,
         num_layers: int = 2,
         bidirectional: bool = True,
@@ -16,7 +17,7 @@ class RNNModel(nn.Module):
         self.bidirectional = bidirectional
 
         self.rnn = nn.RNN(
-            input_size=hidden_dim,
+            input_size=input_dim,
             hidden_size=hidden_dim,
             num_layers=num_layers,
             batch_first=True,
